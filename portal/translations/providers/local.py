@@ -110,8 +110,11 @@ def increment_model_ref(model_size: str):
 
 def decrement_model_ref(model_size: str):
     with _model_lock:
-        if model_size in _active_translations_per_model:
-            _active_translations_per_model[model_size] = max(0, _active_translations_per_model[model_size] - 1)
+        if _active_translations_per_model.get(model_size, 0) <= 0:
+            logger.warning(f"Reference count underflow for {model_size}! This indicates a bug in tracking.")
+            _active_translations_per_model[model_size] = 0
+        else:
+            _active_translations_per_model[model_size] -= 1
 
 
 

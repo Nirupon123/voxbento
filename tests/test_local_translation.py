@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from unittest.mock import patch
 
 import pytest
 
-from portal.translations.providers.local import LocalProvider
+from portal.translations.providers.local import (
+    LocalProvider,
+    ModelEntry,
+    _active_translations_per_model,
+    _loaded_models,
+    eviction_loop,
+)
 
 
 @pytest.mark.anyio
@@ -37,3 +45,46 @@ async def test_local_provider_translate_invalid_language():
         api_key=None,
     )
     assert result is None
+
+
+def test_local_provider_ref_count_decrements_on_exception():
+    provider = LocalProvider()
+    model_size = "test-model-exception"
+
+    _active_translations_per_model[model_size] = 0
+
+    with patch("portal.translations.providers.local.get_model_and_tokenizer", side_effect=ValueError("Mock Error")):
+        result = provider._run_inference("Hello", "eng_Latn", "fra_Latn", model_size)
+        assert result is None
+
+    assert _active_translations_per_model.get(model_size, 0) == 0
+
+
+@pytest.mark.anyio
+async def test_local_provider_eviction_respects_ref_count():
+    model_size = "test-model-eviction"
+
+    # Populate loaded models with an idle timestamp (older than 1 hour)
+    _loaded_models[model_size] = ModelEntry(model=None, tokenizer=None, last_used=time.time() - 4000)
+
+    # Active reference prevents eviction
+    _active_translations_per_model[model_size] = 1
+
+    with patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError()]):
+        try:
+            await eviction_loop()
+        except asyncio.CancelledError:
+            pass
+
+    assert model_size in _loaded_models
+
+    # Releasing the reference allows eviction
+    _active_translations_per_model[model_size] = 0
+
+    with patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError()]):
+        try:
+            await eviction_loop()
+        except asyncio.CancelledError:
+            pass
+
+    assert model_size not in _loaded_models

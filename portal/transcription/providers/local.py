@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 import asyncio
 import gc
 import logging
 import threading
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from faster_whisper import WhisperModel
 
 import numpy as np
 
@@ -14,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ModelEntry:
-    model: any
+    model: WhisperModel
     last_used: float
 
 

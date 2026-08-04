@@ -27,6 +27,7 @@ class ModelEntry:
 _loaded_models = {}
 _active_booths_per_model = {}
 _model_lock = threading.Lock()
+_load_lock = threading.Lock()
 
 
 def increment_model_ref(model_size: str):
@@ -42,15 +43,24 @@ def decrement_model_ref(model_size: str):
 
 def get_model(model_size: str):
     with _model_lock:
-        if model_size not in _loaded_models:
-            logger.info(f"Loading faster-whisper model: {model_size}")
-            from faster_whisper import WhisperModel
-
-            model = WhisperModel(model_size, device="cpu", compute_type="int8")
-            _loaded_models[model_size] = ModelEntry(model=model, last_used=time.time())
-        else:
+        if model_size in _loaded_models:
             _loaded_models[model_size].last_used = time.time()
-        return _loaded_models[model_size].model
+            return _loaded_models[model_size].model
+
+    with _load_lock:
+        # Double-check inside the load lock
+        with _model_lock:
+            if model_size in _loaded_models:
+                _loaded_models[model_size].last_used = time.time()
+                return _loaded_models[model_size].model
+
+        logger.info(f"Loading faster-whisper model: {model_size}")
+        from faster_whisper import WhisperModel
+
+        model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        with _model_lock:
+            _loaded_models[model_size] = ModelEntry(model=model, last_used=time.time())
+            return _loaded_models[model_size].model
 
 
 async def eviction_loop():

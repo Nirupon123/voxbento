@@ -98,12 +98,18 @@ async def test_eviction_loop_does_not_block_on_model_load():
     if model_size in _loaded_models:
         del _loaded_models[model_size]
 
-    def slow_download(*args, **kwargs):
-        time.sleep(2)
+    lock_acquired_event = threading.Event()
+    release_lock_event = threading.Event()
+
+    def simulated_slow_download(*args, **kwargs):
+        # Signal that the background thread is actively holding the load lock
+        lock_acquired_event.set()
+        # Block until the main thread tells us to release
+        release_lock_event.wait(timeout=5.0)
         return model_size
 
     def background_loader():
-        with patch("huggingface_hub.snapshot_download", side_effect=slow_download), \
+        with patch("huggingface_hub.snapshot_download", side_effect=simulated_slow_download), \
              patch("ctranslate2.Translator"), \
              patch("transformers.AutoTokenizer.from_pretrained"):
             from portal.translations.providers.local import get_model_and_tokenizer
@@ -114,8 +120,9 @@ async def test_eviction_loop_does_not_block_on_model_load():
     t = threading.Thread(target=background_loader)
     t.start()
 
-    # Yield control to let the thread acquire the locks and start sleeping
-    await asyncio.sleep(0.2)
+    # Yield control until the thread firmly acquires the load lock
+    while not lock_acquired_event.is_set():
+        await asyncio.sleep(0.01)
 
     start_time = time.time()
 
@@ -131,4 +138,6 @@ async def test_eviction_loop_does_not_block_on_model_load():
     elapsed = time.time() - start_time
     assert elapsed < 1.0, f"Eviction loop blocked for {elapsed} seconds, indicating lock contention!"
 
+    # Release the background thread so it can finish
+    release_lock_event.set()
     t.join()

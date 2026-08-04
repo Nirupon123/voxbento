@@ -104,3 +104,48 @@ class TestTranscriptionProviders:
 
         decrement_model_ref("nonexistent-model")
         assert _active_booths_per_model.get("nonexistent-model", 0) == 0
+
+    async def test_transcription_eviction_loop_does_not_block_on_model_load(self):
+        import threading
+        import time
+
+        from portal.transcription.providers.local import _loaded_models, eviction_loop
+
+        model_size = "test-model-slow-load"
+        if model_size in _loaded_models:
+            del _loaded_models[model_size]
+
+        lock_acquired_event = threading.Event()
+        release_lock_event = threading.Event()
+
+        def simulated_slow_load(*args, **kwargs):
+            lock_acquired_event.set()
+            release_lock_event.wait(timeout=5.0)
+            return MagicMock()
+
+        def background_loader():
+            with patch("faster_whisper.WhisperModel", side_effect=simulated_slow_load):
+                from portal.transcription.providers.local import get_model
+                get_model(model_size)
+
+        t = threading.Thread(target=background_loader)
+        t.start()
+
+        while not lock_acquired_event.is_set():
+            await asyncio.sleep(0.01)
+
+        start_time = time.time()
+
+        with patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError()]):
+            try:
+                await asyncio.wait_for(eviction_loop(), timeout=1.0)
+            except asyncio.CancelledError:
+                pass
+            except TimeoutError:
+                pytest.fail("Eviction loop timed out because it was blocked by the model loading lock!")
+
+        elapsed = time.time() - start_time
+        assert elapsed < 1.0, f"Eviction loop blocked for {elapsed} seconds, indicating lock contention!"
+
+        release_lock_event.set()
+        t.join()

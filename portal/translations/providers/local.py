@@ -40,6 +40,15 @@ class ModelDownloadTqdm(tqdm):
                     _download_progress[model_size]["status"] = "downloading"
 
 
+def get_hf_repo_and_revision(model_size: str) -> tuple[str, str]:
+    hf_repo_id = model_size
+    rev = "main"
+    if model_size == "nllb-200-distilled-600M":
+        hf_repo_id = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
+        rev = "302d78f00e6fdb50a1064059df7c392b735e9d05"
+    return hf_repo_id, rev
+
+
 def trigger_download(model_size: str):
     logger.info(f"Triggering manual download for {model_size}")
 
@@ -54,11 +63,7 @@ def trigger_download(model_size: str):
     try:
         from huggingface_hub import snapshot_download
 
-        hf_repo_id = model_size
-        rev = "main"
-        if model_size == "nllb-200-distilled-600M":
-            hf_repo_id = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
-            rev = "302d78f00e6fdb50a1064059df7c392b735e9d05"
+        hf_repo_id, rev = get_hf_repo_and_revision(model_size)
 
         snapshot_download(repo_id=hf_repo_id, revision=rev, tqdm_class=ScopedTqdm)
         with _progress_lock:
@@ -79,11 +84,7 @@ def get_download_progress(model_size: str):
     try:
         from huggingface_hub import snapshot_download
 
-        hf_repo_id = model_size
-        rev = "main"
-        if model_size == "nllb-200-distilled-600M":
-            hf_repo_id = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
-            rev = "302d78f00e6fdb50a1064059df7c392b735e9d05"
+        hf_repo_id, rev = get_hf_repo_and_revision(model_size)
 
         snapshot_download(repo_id=hf_repo_id, revision=rev, local_files_only=True)
         return {"status": "completed", "n": 1, "total": 1, "rate": 0}
@@ -147,11 +148,9 @@ def get_model_and_tokenizer(model_size: str):
 
                 with _progress_lock:
                     _download_progress[model_size] = {"n": 0, "total": 100, "rate": 0, "status": "downloading"}
-                hf_repo_id = model_size
-                rev = "main"
-                if model_size == "nllb-200-distilled-600M":
-                    hf_repo_id = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
-                    rev = "302d78f00e6fdb50a1064059df7c392b735e9d05"
+
+                hf_repo_id, rev = get_hf_repo_and_revision(model_size)
+
                 local_model_path = snapshot_download(repo_id=hf_repo_id, revision=rev, tqdm_class=ScopedTqdm)
                 with _progress_lock:
                     _download_progress[model_size]["status"] = "completed"

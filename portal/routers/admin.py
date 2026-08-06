@@ -12,6 +12,7 @@ from pathlib import Path
 import pycountry
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 from sqlalchemy import update
 
 from portal.auth import (
@@ -29,6 +30,7 @@ from portal.crypto import encrypt_val
 from portal.database import (
     count_events,
     count_users,
+    create_api_key,
     create_auth_token,
     create_booth,
     create_event,
@@ -39,6 +41,7 @@ from portal.database import (
     delete_event,
     delete_room,
     delete_user,
+    get_api_keys_for_event,
     get_booth_by_id,
     get_event_by_id,
     get_event_by_slug,
@@ -61,6 +64,7 @@ from portal.database import (
     remove_booth_membership,
     remove_event_membership,
     remove_room_membership,
+    revoke_api_key,
     revoke_invite_token,
     set_booth_membership,
     set_event_membership,
@@ -816,6 +820,55 @@ def parse_audio_delay_ms(value: object) -> int:
     if delay_ms < 0 or delay_ms > MAX_AUDIO_DELAY_MS:
         raise HTTPException(status_code=400, detail="Audio synchronization delay must be between 0 and 10000 ms.")
     return delay_ms
+
+
+class APIKeyCreateRequest(BaseModel):
+    name: str
+
+@router.get("/admin/api/events/{event_id}/api-keys", dependencies=[Depends(require_admin)])
+async def admin_list_api_keys(request: Request, event_id: int):
+    async with get_session() as session:
+        keys = await get_api_keys_for_event(session, event_id)
+        return [{"id": k.id, "name": k.name, "preview": k.preview, "created_at": k.created_at.isoformat(), "active": k.active} for k in keys]
+
+
+@router.post("/admin/api/events/{event_id}/api-keys", dependencies=[Depends(require_admin)])
+async def admin_create_api_key(request: Request, event_id: int, data: APIKeyCreateRequest):
+    if not data.name or not data.name.strip():
+        raise HTTPException(status_code=400, detail="API Key name cannot be blank.")
+
+    async with get_session() as session:
+        from sqlalchemy import select
+
+        from portal.models import EventAPIKey
+
+        # Check if active key with same name exists for this event
+        stmt = select(EventAPIKey).where(
+            EventAPIKey.event_id == event_id,
+            EventAPIKey.name == data.name.strip(),
+            EventAPIKey.active
+        )
+        existing = await session.execute(stmt)
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail=f"An active API Key named '{data.name.strip()}' already exists.")
+
+        api_key, raw_key = await create_api_key(session, event_id, data.name.strip())
+        return {
+            "id": api_key.id,
+            "name": api_key.name,
+            "preview": api_key.preview,
+            "created_at": api_key.created_at.isoformat(),
+            "raw_key": raw_key
+        }
+
+
+@router.delete("/admin/api/events/{event_id}/api-keys/{key_id}", dependencies=[Depends(require_admin)])
+async def admin_delete_api_key(request: Request, event_id: int, key_id: int):
+    async with get_session() as session:
+        success = await revoke_api_key(session, key_id, event_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="API Key not found or already revoked")
+        return {"success": True}
 
 
 @router.post("/api/rooms/{room_id}/floor-transcription/start", dependencies=[Depends(require_admin)])

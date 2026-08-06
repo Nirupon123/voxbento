@@ -79,6 +79,81 @@
   </form>
   {% endif %}
 </div>
+
+<!-- API & Integrations-->
+<div class="section-card" style="margin-bottom:20px;" id="api-keys-section" data-event-id="{{ event.id }}">
+  <div class="section-header">
+    <h2>Integrations</h2>
+    <button type="button" class="btn btn-sm btn-primary" onclick="window.adminAPIKeys.showCreateModal()">Generate API Key</button>
+  </div>
+  <p class="muted" style="margin-bottom:12px;">Generate API keys to embed VoxBento into third party platforms.</p>
+  
+  <div id="api-keys-container">
+    <!-- Loaded via JS -->
+    <p class="muted">Loading API keys...</p>
+  </div>
+</div>
+
+<!-- API Key Create Modal -->
+<div id="api-key-modal" class="custom-modal-overlay" style="display: none;">
+  <div class="custom-modal" style="max-width: 400px;">
+    <div class="custom-modal-header" style="margin-bottom: 1rem;">
+      <h3 style="margin: 0; font-size: 1.25rem;">Generate API Key</h3>
+    </div>
+    <div class="custom-modal-body">
+      <form id="api-key-form">
+        <div class="field">
+          <label for="api-key-name">Key Name</label>
+          <input type="text" id="api-key-name" placeholder="e.g. My Integration" required />
+        </div>
+        <div class="custom-modal-footer" style="margin-top: 16px; display: flex; gap: 1rem; justify-content: flex-end;">
+          <button type="button" class="btn btn-outline" onclick="window.adminAPIKeys.closeModal('api-key-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Generate</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- API Key Success Modal -->
+<div id="api-key-success-modal" class="custom-modal-overlay" style="display: none;">
+  <div class="custom-modal" style="max-width: 500px;">
+    <div class="custom-modal-header" style="margin-bottom: 1rem;">
+      <h3 style="margin: 0; font-size: 1.25rem;">API Key Generated</h3>
+    </div>
+    <div class="custom-modal-body">
+      <div class="alert alert-warning" style="margin: 12px 0;">
+        <strong>Important:</strong> Copy this key now. For security reasons, you will not be able to see it again!
+      </div>
+      <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+        <div class="field" style="flex: 1; margin-bottom: 0;">
+          <input type="text" id="api-key-raw-value" readonly onclick="this.select()" style="width: 100%; box-sizing: border-box;" />
+        </div>
+        <button type="button" class="btn btn-outline" id="api-key-copy-btn" onclick="window.adminAPIKeys.copyKey()" style="height: fit-content; align-self: flex-end;">Copy</button>
+      </div>
+      <div class="custom-modal-footer" style="display: flex; gap: 1rem; justify-content: flex-end;">
+        <button type="button" class="btn btn-primary" onclick="window.adminAPIKeys.closeModal('api-key-success-modal')">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- API Key Revoke Modal -->
+<div id="api-key-revoke-modal" class="custom-modal-overlay" style="display: none;">
+  <div class="custom-modal" style="max-width: 400px;">
+    <div class="custom-modal-header" style="margin-bottom: 1rem;">
+      <h3 style="margin: 0; font-size: 1.25rem; color: #cf222e;">Revoke API Key</h3>
+    </div>
+    <div class="custom-modal-body">
+      <p id="api-key-revoke-message">Are you sure you want to revoke this API key? Any integrations using it will instantly break.</p>
+      <p id="api-key-revoke-funny" style="font-style: italic; color: #6b7280; font-size: 0.9rem; margin-top: 12px; margin-bottom: 0;"></p>
+      <div class="custom-modal-footer" style="margin-top: 16px; display: flex; gap: 1rem; justify-content: flex-end;">
+        <button type="button" class="btn btn-outline" onclick="window.adminAPIKeys.closeModal('api-key-revoke-modal')">Cancel</button>
+        <button type="button" class="btn btn-danger" id="api-key-revoke-confirm-btn">Revoke</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endif %}
 
 <div class="section-grid">

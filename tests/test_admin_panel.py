@@ -551,3 +551,109 @@ class TestAdminToken:
         token = create_admin_token()
         payload = decode_token(token)
         assert isinstance(payload, dict)
+
+# ---------------------------------------------------------------------------
+# API Key Tests
+# ---------------------------------------------------------------------------
+
+class TestAPIKeyBOLA:
+    @pytest.mark.anyio
+    async def test_api_key_bola_protection(self, setup_db):
+        from portal.auth import create_user_token
+        from portal.database import create_api_key, create_event, create_user, get_session, set_event_membership
+
+        async with get_session() as session:
+            # Create two events
+            event1 = await create_event(session, slug="event1", display_name="Event 1")
+            event2 = await create_event(session, slug="event2", display_name="Event 2")
+
+            # Create a user who is only admin of Event 1
+            user1 = await create_user(session, email="user1@example.com", display_name="User 1")
+            await set_event_membership(session, user_id=user1.id, event_id=event1.id, role="event_owner")
+
+            # Create an API key in Event 2
+            api_key2, _ = await create_api_key(session, event2.id, name="Event 2 Key")
+            key_id = api_key2.id
+
+        token = create_user_token(user_id=user1.id, email=user1.email)
+
+        async with _client() as c:
+            c.cookies.set("user_token", token)
+
+            # Try to access Event 2's API Keys
+            res_list = await c.get(f"/admin/api/events/{event2.id}/api-keys")
+            assert res_list.status_code == 403
+
+            res_post = await c.post(f"/admin/api/events/{event2.id}/api-keys", json={"name": "hacked"})
+            assert res_post.status_code == 403
+
+            res_delete = await c.delete(f"/admin/api/events/{event2.id}/api-keys/{key_id}")
+            assert res_delete.status_code == 403
+
+
+class TestAPIKeyCRUD:
+    @pytest.mark.anyio
+    async def test_api_key_lifecycle(self, setup_db):
+        from portal.auth import create_user_token
+        from portal.database import create_event, create_user, get_session, set_event_membership
+
+        async with get_session() as session:
+            event = await create_event(session, slug="event-api", display_name="Event API")
+            user = await create_user(session, email="apiadmin@example.com", display_name="API Admin")
+            await set_event_membership(session, user_id=user.id, event_id=event.id, role="event_owner")
+            event_id = event.id
+            user_id = user.id
+            user_email = user.email
+
+        token = create_user_token(user_id=user_id, email=user_email)
+
+        async with _client() as c:
+            c.cookies.set("user_token", token)
+
+            # Initially empty
+            res = await c.get(f"/admin/api/events/{event_id}/api-keys")
+            assert res.status_code == 200
+            assert res.json() == []
+
+            # Create API key
+            res = await c.post(f"/admin/api/events/{event_id}/api-keys", json={"name": "Integration Key"})
+            assert res.status_code == 200
+            data = res.json()
+            assert data["name"] == "Integration Key"
+            assert "raw_key" in data
+            assert data["raw_key"].startswith("vb_")
+
+            key_id = data["id"]
+
+            # Prevent duplicate name
+            res_dup = await c.post(f"/admin/api/events/{event_id}/api-keys", json={"name": "Integration Key"})
+            assert res_dup.status_code == 400
+            assert "already exists" in res_dup.json()["detail"]
+
+            # Prevent blank name
+            res_blank = await c.post(f"/admin/api/events/{event_id}/api-keys", json={"name": "   "})
+            assert res_blank.status_code == 400
+            assert "cannot be blank" in res_blank.json()["detail"]
+
+            # List keys (should contain 1)
+            res = await c.get(f"/admin/api/events/{event_id}/api-keys")
+            assert res.status_code == 200
+            keys = res.json()
+            assert len(keys) == 1
+            assert keys[0]["id"] == key_id
+            assert keys[0]["name"] == "Integration Key"
+            assert "raw_key" not in keys[0]
+
+            # Revoke key
+            res_del = await c.delete(f"/admin/api/events/{event_id}/api-keys/{key_id}")
+            assert res_del.status_code == 200
+
+            # List keys (should be empty again)
+            res = await c.get(f"/admin/api/events/{event_id}/api-keys")
+            assert res.status_code == 200
+            assert res.json() == []
+
+            # Duplicate name is now allowed since the old one is revoked
+            res_remake = await c.post(f"/admin/api/events/{event_id}/api-keys", json={"name": "Integration Key"})
+            assert res_remake.status_code == 200
+            assert res_remake.json()["name"] == "Integration Key"

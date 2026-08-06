@@ -88,6 +88,8 @@ class Event(Base):
 
     rooms: Mapped[list[Room]] = relationship(back_populates="event", cascade="all, delete-orphan")
     booths: Mapped[list[DBBooth]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    api_keys: Mapped[list[EventAPIKey]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    usage_metrics: Mapped[list[UsageMetric]] = relationship(back_populates="event", cascade="all, delete-orphan")
 
     @validates("slug")
     def _validate_slug(self, _key: str, value: str) -> str:
@@ -524,3 +526,40 @@ class RoomMembership(Base):
 
     def __repr__(self) -> str:
         return f"<RoomMembership user={self.user_id} room={self.room_id} role={self.role!r}>"
+
+
+# ---------------------------------------------------------------------------
+# API Keys & Metrics (Embeddable B2B)
+# ---------------------------------------------------------------------------
+
+
+class EventAPIKey(Base):
+    __tablename__ = "event_api_keys"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
+    preview: Mapped[str] = mapped_column(String(16))
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    event: Mapped[Event] = relationship(back_populates="api_keys")
+
+    def __repr__(self) -> str:
+        return f"<EventAPIKey id={self.id} event={self.event_id} preview={self.preview!r}>"
+
+
+class UsageMetric(Base):
+    __tablename__ = "usage_metrics"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
+    metric_name: Mapped[str] = mapped_column(String(100), index=True)
+    value: Mapped[int] = mapped_column(Integer, default=1)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    event: Mapped[Event] = relationship(back_populates="usage_metrics")
+
+    def __repr__(self) -> str:
+        return f"<UsageMetric event={self.event_id} metric={self.metric_name!r} value={self.value}>"

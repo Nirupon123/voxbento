@@ -14,7 +14,9 @@ any database operations.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import secrets
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -30,11 +32,13 @@ from portal.models import (
     BoothMembership,
     DBBooth,
     Event,
+    EventAPIKey,
     EventMembership,
     InviteToken,
     Room,
     RoomMembership,
     TranscriptSegment,
+    UsageMetric,
     User,
     generate_token,
     utc_now,
@@ -769,3 +773,66 @@ async def save_transcript_segment(booth_id_str: str, text: str, room_id: int | N
     except Exception as e:
         logger.error(f"Failed to save transcript segment: {e}")
         return None
+
+# ---------------------------------------------------------------------------
+# API Keys & Metrics (Embeddable B2B)
+# ---------------------------------------------------------------------------
+
+
+async def create_api_key(session: AsyncSession, event_id: int, name: str | None = None) -> tuple[EventAPIKey, str]:
+    raw_secret = secrets.token_urlsafe(32)
+    raw_key = f"vb_{raw_secret}"
+
+    # SHA-256 hash for O(1) lookup
+    key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+    # preview: vb_ + last 4 chars
+    preview = f"vb_...{raw_key[-4:]}"
+
+    api_key = EventAPIKey(
+        event_id=event_id,
+        name=name,
+        preview=preview,
+        key_hash=key_hash,
+        active=True
+    )
+    session.add(api_key)
+    await session.flush()
+    return api_key, raw_key
+
+
+async def get_api_keys_for_event(session: AsyncSession, event_id: int) -> list[EventAPIKey]:
+    stmt = select(EventAPIKey).where(
+        EventAPIKey.event_id == event_id,
+        EventAPIKey.active.is_(True)
+    ).order_by(EventAPIKey.created_at.desc())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def revoke_api_key(session: AsyncSession, key_id: int, event_id: int) -> bool:
+    stmt = select(EventAPIKey).where(EventAPIKey.id == key_id, EventAPIKey.event_id == event_id)
+    result = await session.execute(stmt)
+    key = result.scalar_one_or_none()
+    if key:
+        key.active = False
+        await session.flush()
+        return True
+    return False
+
+
+async def verify_api_key(session: AsyncSession, raw_key: str) -> EventAPIKey | None:
+    key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    stmt = select(EventAPIKey).where(EventAPIKey.key_hash == key_hash, EventAPIKey.active)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def log_usage_metric(session: AsyncSession, event_id: int, metric_name: str, value: int = 1) -> None:
+    metric = UsageMetric(
+        event_id=event_id,
+        metric_name=metric_name,
+        value=value
+    )
+    session.add(metric)
+    await session.flush()

@@ -124,10 +124,10 @@ class LocalProvider(TranscriptionProvider):
     ) -> str:
         model = get_model(model_size)
         segments, _ = model.transcribe(
-            audio_data, 
-            beam_size=5, 
-            vad_filter=True, 
-            language=language_code, 
+            audio_data,
+            beam_size=5,
+            vad_filter=True,
+            language=language_code,
             word_timestamps=True,
             compression_ratio_threshold=2.4,
             no_speech_threshold=0.6,

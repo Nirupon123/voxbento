@@ -149,3 +149,64 @@ class TestTranscriptionProviders:
 
         release_lock_event.set()
         t.join()
+
+    async def test_local_provider_applies_hallucination_filters(self):
+        import numpy as np
+
+        from portal.transcription.providers.local import LocalProvider
+
+        provider = LocalProvider()
+
+        with patch("portal.transcription.providers.local.get_model") as mock_get_model:
+            # Create a dummy function with the expected signature so inspect.signature works
+            def dummy_transcribe(
+                audio,
+                beam_size=5,
+                vad_filter=False,
+                language=None,
+                word_timestamps=False,
+                compression_ratio_threshold=2.4,
+                no_speech_threshold=0.6,
+                log_prob_threshold=-1.0,
+                condition_on_previous_text=False,
+                **kwargs
+            ):
+                pass
+
+            mock_model = MagicMock()
+            mock_model.transcribe = MagicMock(spec=dummy_transcribe)
+            mock_get_model.return_value = mock_model
+
+            # Mock a segment with valid speech
+            mock_segment = MagicMock()
+            mock_segment.text = "Hello world"
+
+            mock_word1 = MagicMock()
+            mock_word1.word = "Hello"
+            mock_word1.end = 1.5
+
+            mock_word2 = MagicMock()
+            mock_word2.word = "world"
+            mock_word2.end = 2.0
+
+            mock_segment.words = [mock_word1, mock_word2]
+
+            # Transcribe returns an iterable of segments and info
+            mock_model.transcribe.return_value = ([mock_segment], None)
+
+            # Run inference with dummy audio
+            audio_data = np.zeros(16000, dtype=np.float32)
+            result = provider._run_inference(audio_data, "en", "tiny", None)
+
+            # Verify that valid speech passes through
+            assert result == "Hello world"
+
+            # Verify that the anti-hallucination filters are strictly applied
+            mock_model.transcribe.assert_called_once()
+            _, kwargs = mock_model.transcribe.call_args
+
+            assert kwargs.get("compression_ratio_threshold") == 2.4
+            assert kwargs.get("no_speech_threshold") == 0.6
+            assert kwargs.get("log_prob_threshold") == -1.0
+            assert kwargs.get("condition_on_previous_text") is False
+            assert kwargs.get("vad_filter") is True

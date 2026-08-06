@@ -137,10 +137,20 @@ window.adminAPIKeys = {
       activeKeys.forEach(k => {
         const d = new Date(k.created_at).toLocaleDateString();
         
-        const safeName = (k.name || 'Unnamed').replace(/"/g, '&quot;');
+        const escapeHTML = str => str.replace(/[&<>'"]/g, 
+          tag => ({
+              '&': '&amp;',
+              '<': '&lt;',
+              '>': '&gt;',
+              "'": '&#39;',
+              '"': '&quot;'
+          }[tag]));
+        
+        const safeName = k.name ? escapeHTML(k.name) : 'Unnamed';
+        const displayName = k.name ? escapeHTML(k.name) : '<em>Unnamed</em>';
         html += `
           <tr>
-            <td>${k.name || '<em>Unnamed</em>'}</td>
+            <td>${displayName}</td>
             <td><code>${k.preview}</code></td>
             <td>${d}</td>
             <td><button class="btn btn-sm btn-danger" data-key-name="${safeName}" onclick="window.adminAPIKeys.revokeKey(${k.id}, this.getAttribute('data-key-name'))">Revoke</button></td>

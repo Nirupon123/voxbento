@@ -21,6 +21,7 @@ from portal.auth import (
     get_admin_flags,
     get_current_user,
     require_admin,
+    require_event_owner,
     require_super_admin,
     require_user,
 )
@@ -825,14 +826,14 @@ def parse_audio_delay_ms(value: object) -> int:
 class APIKeyCreateRequest(BaseModel):
     name: str
 
-@router.get("/admin/api/events/{event_id}/api-keys", dependencies=[Depends(require_admin)])
+@router.get("/admin/api/events/{event_id}/api-keys", dependencies=[Depends(require_event_owner)])
 async def admin_list_api_keys(request: Request, event_id: int):
     async with get_session() as session:
         keys = await get_api_keys_for_event(session, event_id)
         return [{"id": k.id, "name": k.name, "preview": k.preview, "created_at": k.created_at.isoformat(), "active": k.active} for k in keys]
 
 
-@router.post("/admin/api/events/{event_id}/api-keys", dependencies=[Depends(require_admin)])
+@router.post("/admin/api/events/{event_id}/api-keys", dependencies=[Depends(require_event_owner)])
 async def admin_create_api_key(request: Request, event_id: int, data: APIKeyCreateRequest):
     if not data.name or not data.name.strip():
         raise HTTPException(status_code=400, detail="API Key name cannot be blank.")
@@ -862,7 +863,7 @@ async def admin_create_api_key(request: Request, event_id: int, data: APIKeyCrea
         }
 
 
-@router.delete("/admin/api/events/{event_id}/api-keys/{key_id}", dependencies=[Depends(require_admin)])
+@router.delete("/admin/api/events/{event_id}/api-keys/{key_id}", dependencies=[Depends(require_event_owner)])
 async def admin_delete_api_key(request: Request, event_id: int, key_id: int):
     async with get_session() as session:
         success = await revoke_api_key(session, key_id, event_id)

@@ -159,6 +159,49 @@ async def require_super_admin(request: Request) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super-admin access required.")
 
 
+async def require_event_owner(request: Request) -> None:
+    """FastAPI dependency that guards event owner routes.
+
+    Checks for a valid ``admin_token`` cookie containing a JWT with
+    ``admin=True`` claim. Also accepts a valid ``user_token`` with
+    ``is_admin=True``, or if the user is an event_owner for the specified event.
+    Returns None on success; raises HTTP 403 on failure.
+    """
+    event_id_str = request.path_params.get("event_id")
+    event_id = int(event_id_str) if event_id_str and event_id_str.isdigit() else None
+
+    user_cookie = request.cookies.get("user_token", "")
+    if user_cookie:
+        try:
+            payload = decode_token(user_cookie)
+            if payload.get("user"):
+                if payload.get("is_admin"):
+                    return
+                if payload.get("sub"):
+                    from portal.database import get_session, list_memberships_for_user
+
+                    async with get_session() as db_session:
+                        memberships = await list_memberships_for_user(db_session, int(payload["sub"]))
+                        if event_id is not None:
+                            if any((m.event_id == event_id and m.role == "event_owner" for m in memberships)):
+                                return
+                        else:
+                            if any((m.role == "event_owner" for m in memberships)):
+                                return
+        except jwt.InvalidTokenError:
+            pass
+
+    cookie = request.cookies.get("admin_token", "")
+    if not cookie:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+    try:
+        payload = decode_token(cookie)
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid admin token.")
+    if not payload.get("admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+
+
 def create_admin_token() -> str:
     """Create a JWT with admin=True claim for admin panel access."""
     now = datetime.now(timezone.utc)

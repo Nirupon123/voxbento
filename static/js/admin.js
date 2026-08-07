@@ -113,6 +113,16 @@ window.adminAPIKeys = {
         this.generateKey();
       });
     }
+
+    const container = document.getElementById('api-keys-container');
+    if (container) {
+      container.addEventListener('click', (e) => {
+        const btn = e.target.closest('.revoke-key-btn');
+        if (btn) {
+          this.revokeKey(btn.dataset.keyId, btn.dataset.keyName);
+        }
+      });
+    }
   },
 
   async loadKeys() {
@@ -153,7 +163,7 @@ window.adminAPIKeys = {
             <td>${displayName}</td>
             <td><code>${k.preview}</code></td>
             <td>${d}</td>
-            <td><button class="btn btn-sm btn-danger" data-key-name="${safeName}" onclick="window.adminAPIKeys.revokeKey(${k.id}, this.getAttribute('data-key-name'))">Revoke</button></td>
+            <td><button class="btn btn-sm btn-danger revoke-key-btn" data-key-id="${k.id}" data-key-name="${safeName}">Revoke</button></td>
           </tr>
         `;
       });

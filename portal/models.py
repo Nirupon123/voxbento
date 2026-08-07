@@ -536,8 +536,12 @@ class RoomMembership(Base):
 class EventAPIKey(Base):
     __tablename__ = "event_api_keys"
 
+    __table_args__ = (
+        Index("ix_event_api_keys_active_name", "event_id", "name", unique=True, postgresql_where=sa.text("active"), sqlite_where=sa.text("active")),
+    )
+
     id: Mapped[int] = mapped_column(primary_key=True)
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
     preview: Mapped[str] = mapped_column(String(16))
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)

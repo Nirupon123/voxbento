@@ -590,6 +590,49 @@ class TestAPIKeyBOLA:
             res_delete = await c.delete(f"/admin/api/events/{event2.id}/api-keys/{key_id}")
             assert res_delete.status_code == 403
 
+    @pytest.mark.anyio
+    async def test_api_key_room_coordinator_blocked(self, setup_db):
+        from portal.auth import create_user_token
+        from portal.database import (
+            create_api_key,
+            create_event,
+            create_room,
+            create_user,
+            get_session,
+            set_room_membership,
+        )
+
+        async with get_session() as session:
+            # Create an event and a room
+            event = await create_event(session, slug="event-coordinator", display_name="Event Coordinator")
+            room = await create_room(session, event_id=event.id, display_name="Room 1")
+
+            # Create a user who is only a room coordinator for Room 1
+            user = await create_user(session, email="coordinator@example.com", display_name="Coordinator")
+            await set_room_membership(session, user_id=user.id, room_id=room.id, role="room_coordinator")
+
+            # Create an API key in the event to test deletion
+            api_key, _ = await create_api_key(session, event.id, name="Event Key")
+            key_id = api_key.id
+            event_id = event.id
+
+        token = create_user_token(user_id=user.id, email=user.email)
+
+        async with _client() as c:
+            c.cookies.set("user_token", token)
+
+            # Try to list keys
+            res_list = await c.get(f"/admin/api/events/{event_id}/api-keys")
+            assert res_list.status_code == 403
+
+            # Try to create key
+            res_post = await c.post(f"/admin/api/events/{event_id}/api-keys", json={"name": "hacked"})
+            assert res_post.status_code == 403
+
+            # Try to delete key
+            res_delete = await c.delete(f"/admin/api/events/{event_id}/api-keys/{key_id}")
+            assert res_delete.status_code == 403
+
 
 class TestAPIKeyCRUD:
     @pytest.mark.anyio
@@ -657,3 +700,33 @@ class TestAPIKeyCRUD:
             res_remake = await c.post(f"/admin/api/events/{event_id}/api-keys", json={"name": "Integration Key"})
             assert res_remake.status_code == 200
             assert res_remake.json()["name"] == "Integration Key"
+
+    @pytest.mark.anyio
+    async def test_hmac_sha256_hashing(self, setup_db):
+        import hashlib
+        import hmac
+
+        from portal.config import settings
+        from portal.database import create_api_key, create_event, get_session, verify_api_key
+
+        async with get_session() as session:
+            event = await create_event(session, slug="hmac-event", display_name="HMAC Event")
+            api_key, raw_key = await create_api_key(session, event.id, "HMAC Test Key")
+
+            # Verify the key using the helper function
+            verified_key = await verify_api_key(session, raw_key)
+            assert verified_key is not None
+            assert verified_key.id == api_key.id
+
+            # Manually verify that it uses HMAC-SHA256 with the server secret
+            expected_hash = hmac.new(
+                settings.effective_jwt_secret.encode("utf-8"),
+                raw_key.encode("utf-8"),
+                hashlib.sha256
+            ).hexdigest()
+
+            assert verified_key.key_hash == expected_hash
+
+            # Verify that plain SHA256 does NOT match the stored hash
+            plain_sha256 = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+            assert verified_key.key_hash != plain_sha256

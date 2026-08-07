@@ -15,6 +15,7 @@ any database operations.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import secrets
 from collections.abc import AsyncGenerator
@@ -26,6 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import joinedload
 
+from portal.config import settings
 from portal.models import (
     AuthToken,
     Base,
@@ -783,8 +785,8 @@ async def create_api_key(session: AsyncSession, event_id: int, name: str | None 
     raw_secret = secrets.token_urlsafe(32)
     raw_key = f"vb_{raw_secret}"
 
-    # SHA-256 hash for O(1) lookup
-    key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    # HMAC-SHA256 hash for O(1) lookup
+    key_hash = hmac.new(settings.effective_jwt_secret.encode("utf-8"), raw_key.encode("utf-8"), hashlib.sha256).hexdigest()
 
     # preview: vb_ + last 4 chars
     preview = f"vb_...{raw_key[-4:]}"
@@ -797,6 +799,7 @@ async def create_api_key(session: AsyncSession, event_id: int, name: str | None 
         active=True
     )
     session.add(api_key)
+    await log_usage_metric(session, event_id, "api_key_created")
     await session.flush()
     return api_key, raw_key
 
@@ -822,10 +825,13 @@ async def revoke_api_key(session: AsyncSession, key_id: int, event_id: int) -> b
 
 
 async def verify_api_key(session: AsyncSession, raw_key: str) -> EventAPIKey | None:
-    key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    key_hash = hmac.new(settings.effective_jwt_secret.encode("utf-8"), raw_key.encode("utf-8"), hashlib.sha256).hexdigest()
     stmt = select(EventAPIKey).where(EventAPIKey.key_hash == key_hash, EventAPIKey.active)
     result = await session.execute(stmt)
-    return result.scalar_one_or_none()
+    key = result.scalar_one_or_none()
+    if key:
+        await log_usage_metric(session, key.event_id, "api_key_verified")
+    return key
 
 
 async def log_usage_metric(session: AsyncSession, event_id: int, metric_name: str, value: int = 1) -> None:

@@ -128,7 +128,9 @@ def _require_access(
         return
     if credentials is not None:
         try:
-            decode_token(credentials.credentials)
+            payload = decode_token(credentials.credentials)
+            if payload.get("role") == "listener":
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Listener tokens cannot be used for this API.")
             return
         except pyjwt.InvalidTokenError:
             pass

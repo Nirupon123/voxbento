@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from portal.auth import security
+from portal.auth import create_listener_token, security
 from portal.booth_identity import make_booth_id, make_mediamtx_path
 from portal.config import settings
-from portal.database import get_session
+from portal.database import get_session, log_usage_metric, verify_api_key
 from portal.globals import booths
 from portal.models import DBBooth, Event
+from portal.rate_limit import check_rate_limit
 from portal.schemas.booth import CreateBoothRequest
 from portal.transcription import ProviderConfig, ProviderEnum, get_api_key
 from portal.transcription.worker import start_transcription_worker, stop_transcription_worker
@@ -18,6 +19,29 @@ from portal.utils import _check_mediamtx, _ensure_mediamtx_path, _require_access
 from portal.websockets.manager import broadcast_transcription
 
 router = APIRouter(prefix="/api")
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+@router.post("/v1/tokens/listener", status_code=status.HTTP_201_CREATED)
+async def provision_listener_token(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+):
+    ip_address = request.client.host if request.client else "unknown"
+    if not check_rate_limit("api_token_provision", ip_address, max_requests=60, window_seconds=60):
+        raise HTTPException(status_code=429, detail="Too many requests")
+
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid Bearer token")
+
+    async with get_session() as session:
+        key = await verify_api_key(session, credentials.credentials)
+        if not key:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key")
+
+        await log_usage_metric(session, key.event_id, "listener_token_issued")
+        token = create_listener_token(event_slug=key.event.slug)
+        return {"token": token}
 
 
 @router.post("/events/{event_slug}/booths", status_code=status.HTTP_201_CREATED)

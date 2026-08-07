@@ -45,6 +45,19 @@ def create_participant_token(*, booth_id: int, role: str, event_slug: str, langu
     return jwt.encode(payload, settings.effective_jwt_secret, algorithm="HS256")
 
 
+def create_listener_token(*, event_slug: str) -> str:
+    """Create a short-lived JWT for listener access via API."""
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "role": "listener",
+        "event_slug": event_slug,
+        "iat": now,
+        "exp": now + timedelta(seconds=settings.listener_token_expiry_seconds),
+    }
+    return jwt.encode(payload, settings.effective_jwt_secret, algorithm="HS256")
+
+
 def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.effective_jwt_secret, algorithms=["HS256"])
 

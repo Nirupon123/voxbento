@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 import sqlalchemy as sa
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from portal.config import settings
 from portal.models import (
@@ -826,7 +826,7 @@ async def revoke_api_key(session: AsyncSession, key_id: int, event_id: int) -> b
 
 async def verify_api_key(session: AsyncSession, raw_key: str) -> EventAPIKey | None:
     key_hash = hmac.new(settings.effective_jwt_secret.encode("utf-8"), raw_key.encode("utf-8"), hashlib.sha256).hexdigest()
-    stmt = select(EventAPIKey).where(EventAPIKey.key_hash == key_hash, EventAPIKey.active)
+    stmt = select(EventAPIKey).where(EventAPIKey.key_hash == key_hash, EventAPIKey.active).options(selectinload(EventAPIKey.event))
     result = await session.execute(stmt)
     key = result.scalar_one_or_none()
     if key:

@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     # JWT configuration — jwt_secret defaults to secret_key when empty
     jwt_secret: str = ""
     jwt_expiry_seconds: int = 86400
+    listener_token_expiry_seconds: int = 14400  # 4 hours
 
     # Database — SQLite for dev, PostgreSQL for prod
     database_url: str = "sqlite+aiosqlite:///./interpretation.db"

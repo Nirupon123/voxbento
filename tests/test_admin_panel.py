@@ -862,15 +862,15 @@ class TestListenerTokenAPI:
 
             from fastapi_app import app as fastapi_app
 
-            with TestClient(app=fastapi_app) as tc:
-                from starlette.websockets import WebSocketDisconnect
-                booth_id_event_b = "event-b-english"
-                with pytest.raises(WebSocketDisconnect) as exc_info:
-                    with tc.websocket_connect(
-                        f"/ws/captions/{booth_id_event_b}?token={token_event_a}",
-                    ) as ws:
-                        ws.receive_text()
-                assert exc_info.value.code == 4003
+            tc = TestClient(app=fastapi_app)
+            from starlette.websockets import WebSocketDisconnect
+            booth_id_event_b = "event-b-english"
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                with tc.websocket_connect(
+                    f"/ws/captions/{booth_id_event_b}?token={token_event_a}",
+                ) as ws:
+                    ws.receive_text()
+            assert exc_info.value.code == 4003
         finally:
             os.environ["BOOTH_ACCESS_TOKEN"] = ""
             settings.booth_access_token = ""
@@ -893,13 +893,13 @@ class TestListenerTokenAPI:
 
             from fastapi_app import app as fastapi_app
 
-            with TestClient(app=fastapi_app) as tc:
-                booth_id_event_a = "event-a-english"
-                with tc.websocket_connect(
-                    f"/ws/captions/{booth_id_event_a}?token={token_event_a}",
-                ) as ws:
-                    # Connection accepted — no exception raised, just disconnect cleanly
-                    ws.close()
+            tc = TestClient(app=fastapi_app)
+            booth_id_event_a = "event-a-english"
+            with tc.websocket_connect(
+                f"/ws/captions/{booth_id_event_a}?token={token_event_a}",
+            ) as ws:
+                # Connection accepted — no exception raised, just disconnect cleanly
+                ws.close()
         finally:
             os.environ["BOOTH_ACCESS_TOKEN"] = ""
             settings.booth_access_token = ""
@@ -922,14 +922,14 @@ class TestListenerTokenAPI:
 
             from fastapi_app import app as fastapi_app
 
-            with TestClient(app=fastapi_app) as tc:
-                from starlette.websockets import WebSocketDisconnect
-                with pytest.raises(WebSocketDisconnect) as exc_info:
-                    with tc.websocket_connect(
-                        f"/ws/booth/event-a-english?token={token}",
-                    ) as ws:
-                        ws.receive_text()
-                assert exc_info.value.code == 4003
+            tc = TestClient(app=fastapi_app)
+            from starlette.websockets import WebSocketDisconnect
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                with tc.websocket_connect(
+                    f"/ws/booth/event-a-english?token={token}",
+                ) as ws:
+                    ws.receive_text()
+            assert exc_info.value.code == 4003
         finally:
             os.environ["BOOTH_ACCESS_TOKEN"] = ""
             settings.booth_access_token = ""

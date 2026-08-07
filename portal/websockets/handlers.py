@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 
+import jwt as _pyjwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from portal.auth import resolve_booth_role, verify_ws_token
@@ -23,6 +25,20 @@ from portal.websockets.manager import (
     manager,
     tts_manager,
 )
+
+_log = logging.getLogger(__name__)
+
+
+def _decode_ws_listener_token(websocket: WebSocket) -> dict | None:
+    """Decode a JWT from the ?token= query param, returning the payload or None."""
+    raw = websocket.query_params.get("token", "")
+    if not raw:
+        return None
+    try:
+        return _pyjwt.decode(raw, settings.effective_jwt_secret, algorithms=["HS256"])
+    except _pyjwt.InvalidTokenError:
+        return None
+
 
 router = APIRouter()
 
@@ -59,6 +75,16 @@ async def ws_booth(websocket: WebSocket, booth_id: str) -> None:
             continue
 
     ws_granted_role = await resolve_booth_role(ws_session_payload, booth_id)
+
+    # Reject listener tokens entirely from the booth management WebSocket.
+    # Listener tokens are only valid for /ws/captions/{booth_id}.
+    if ws_session_payload is not None and ws_session_payload.get("role") == "listener":
+        await websocket.close(code=4003)
+        return
+    query_payload = _decode_ws_listener_token(websocket)
+    if query_payload and query_payload.get("role") == "listener":
+        await websocket.close(code=4003)
+        return
 
     # Validate invite/participant token scope: the token's (event_slug, language_code)
     # must match the booth being connected to.  This prevents a valid token for booth A
@@ -134,6 +160,29 @@ async def ws_booth(websocket: WebSocket, booth_id: str) -> None:
 
 @router.websocket("/ws/captions/{booth_id}")
 async def ws_captions(websocket: WebSocket, booth_id: str) -> None:
+    """WebSocket endpoint for live captions. Listener tokens are limited to their own event"""
+    if settings.booth_access_token:
+        payload = _decode_ws_listener_token(websocket)
+        if payload is None:
+            await websocket.close(code=4001)
+            return
+        # For listener tokens, enforce event_slug with booth_id binding.
+        if payload.get("role") == "listener":
+            token_event_slug = payload.get("event_slug", "")
+            if not token_event_slug:
+                await websocket.close(code=4003)
+                return
+            # booth_id is composed of <event_slug>-<language_code>; it must start
+            # with the token's event_slug to confirm this token is scoped here.
+            expected_prefix = f"{token_event_slug}-"
+            if not booth_id.startswith(expected_prefix):
+                _log.warning(
+                    "Listener token event_slug=%r does not match booth_id=%r — rejecting.",
+                    token_event_slug,
+                    booth_id,
+                )
+                await websocket.close(code=4003)
+                return
     await websocket.accept()
     listener_manager.add(websocket, booth_id)
     try:

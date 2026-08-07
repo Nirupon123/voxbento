@@ -840,3 +840,96 @@ class TestListenerTokenAPI:
             )
             assert response.status_code == 429
             assert response.json() == {"detail": "Too many requests"}
+
+    @pytest.mark.anyio
+    async def test_listener_token_cross_event_ws_captions_rejected(self, setup_db):
+        """A listener JWT scoped to event-a must not be accepted on event-b's captions WS
+        """
+        import os
+
+        from httpx import ASGITransport, AsyncClient
+        from starlette.testclient import TestClient
+
+        from portal.auth import create_listener_token
+        from portal.config import settings
+
+        os.environ["BOOTH_ACCESS_TOKEN"] = "test-booth-token"
+        settings.booth_access_token = "test-booth-token"
+
+        try:
+            # Mint a listener token scoped to event-a
+            token_event_a = create_listener_token(event_slug="event-a")
+
+            from fastapi_app import app as fastapi_app
+
+            with TestClient(app=fastapi_app) as tc:
+                from starlette.websockets import WebSocketDisconnect
+                booth_id_event_b = "event-b-english"
+                with pytest.raises(WebSocketDisconnect) as exc_info:
+                    with tc.websocket_connect(
+                        f"/ws/captions/{booth_id_event_b}?token={token_event_a}",
+                    ) as ws:
+                        ws.receive_text()
+                assert exc_info.value.code == 4003
+        finally:
+            os.environ["BOOTH_ACCESS_TOKEN"] = ""
+            settings.booth_access_token = ""
+
+    @pytest.mark.anyio
+    async def test_listener_token_correct_event_ws_captions_accepted(self, setup_db):
+        """A listener JWT scoped to event-a is accepted on event-a's captions WS."""
+        import os
+
+        from starlette.testclient import TestClient
+
+        from portal.auth import create_listener_token
+        from portal.config import settings
+
+        os.environ["BOOTH_ACCESS_TOKEN"] = "test-booth-token"
+        settings.booth_access_token = "test-booth-token"
+
+        try:
+            token_event_a = create_listener_token(event_slug="event-a")
+
+            from fastapi_app import app as fastapi_app
+
+            with TestClient(app=fastapi_app) as tc:
+                booth_id_event_a = "event-a-english"
+                with tc.websocket_connect(
+                    f"/ws/captions/{booth_id_event_a}?token={token_event_a}",
+                ) as ws:
+                    # Connection accepted — no exception raised, just disconnect cleanly
+                    ws.close()
+        finally:
+            os.environ["BOOTH_ACCESS_TOKEN"] = ""
+            settings.booth_access_token = ""
+
+    @pytest.mark.anyio
+    async def test_listener_token_rejected_from_booth_management_ws(self, setup_db):
+        """Listener tokens must be rejected from /ws/booth/{booth_id} entirely."""
+        import os
+
+        from starlette.testclient import TestClient
+
+        from portal.auth import create_listener_token
+        from portal.config import settings
+
+        os.environ["BOOTH_ACCESS_TOKEN"] = "test-booth-token"
+        settings.booth_access_token = "test-booth-token"
+
+        try:
+            token = create_listener_token(event_slug="event-a")
+
+            from fastapi_app import app as fastapi_app
+
+            with TestClient(app=fastapi_app) as tc:
+                from starlette.websockets import WebSocketDisconnect
+                with pytest.raises(WebSocketDisconnect) as exc_info:
+                    with tc.websocket_connect(
+                        f"/ws/booth/event-a-english?token={token}",
+                    ) as ws:
+                        ws.receive_text()
+                assert exc_info.value.code == 4003
+        finally:
+            os.environ["BOOTH_ACCESS_TOKEN"] = ""
+            settings.booth_access_token = ""

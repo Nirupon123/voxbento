@@ -44,8 +44,22 @@ async def provision_listener_token(
         return {"token": token}
 
 
+@router.delete("/events/{event_slug}/booths/{language_code}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_event_booth(
+    request: Request,
+    event_slug: str,
+    language_code: str,
+    token: str = Query(""),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    """Delete a booth from an event."""
+    _require_access(request, credentials, token)
+    await booths.delete_booth(event_slug, language_code)
+
+
 @router.post("/events/{event_slug}/booths", status_code=status.HTTP_201_CREATED)
 async def create_event_booth(
+    request: Request,
     event_slug: str,
     body: CreateBoothRequest,
     token: str = Query(""),
@@ -56,7 +70,7 @@ async def create_event_booth(
     Returns the booth state including derived booth_id, MediaMTX path,
     WHIP URL, and WHEP URL.
     """
-    _require_access(credentials, token)
+    _require_access(request, credentials, token)
     try:
         state = await booths.create_booth(
             event_slug=event_slug,
@@ -126,10 +140,11 @@ async def create_event_booth(
 
 @router.get("/events/{event_slug}/booths")
 async def list_event_booths(
+    request: Request,
     event_slug: str, token: str = Query(""), credentials: HTTPAuthorizationCredentials | None = Depends(security)
 ) -> dict:
     """List all booths for an event."""
-    _require_access(credentials, token)
+    _require_access(request, credentials, token)
     booth_list = await booths.list_booths_for_event(event_slug)
     for b in booth_list:
         mtx = b.get("mediamtx_path", "")
@@ -141,13 +156,14 @@ async def list_event_booths(
 
 @router.get("/events/{event_slug}/booths/{language_code}/state")
 async def event_booth_state(
+    request: Request,
     event_slug: str,
     language_code: str,
     token: str = Query(""),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict:
     """Event-scoped booth state — never auto-creates a booth."""
-    _require_access(credentials, token)
+    _require_access(request, credentials, token)
     state = await booths.get_booth_for_event(event_slug, language_code)
     if state is None:
         raise HTTPException(
@@ -159,6 +175,7 @@ async def event_booth_state(
 
 @router.get("/events/{event_slug}/booths/{language_code}/whip-url")
 async def event_booth_whip_url(
+    request: Request,
     event_slug: str,
     language_code: str,
     participant_id: str = Query(...),
@@ -166,7 +183,7 @@ async def event_booth_whip_url(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict:
     """Event-scoped WHIP URL — validates event ownership before returning."""
-    _require_access(credentials, token)
+    _require_access(request, credentials, token)
     booth_id = make_booth_id(event_slug, language_code)
     channel_id = make_mediamtx_path(event_slug, language_code)
     try:
@@ -190,7 +207,7 @@ async def api_transcription_start(
     token: str = Query(""),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ):
-    _require_access(credentials, token)
+    _require_access(request, credentials, token)
     booth_id = make_booth_id(event_slug, language_code)
     async with get_session() as session:
         stmt = (
@@ -232,12 +249,13 @@ async def api_transcription_start(
 
 @router.post("/events/{event_slug}/booths/{language_code}/transcription/stop")
 async def api_transcription_stop(
+    request: Request,
     event_slug: str,
     language_code: str,
     token: str = Query(""),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ):
-    _require_access(credentials, token)
+    _require_access(request, credentials, token)
     booth_id = make_booth_id(event_slug, language_code)
     await stop_transcription_worker(booth_id)
     return {"status": "stopped"}

@@ -74,23 +74,9 @@ def verify_bearer(credentials: HTTPAuthorizationCredentials | None) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {exc}")
 
 
-async def verify_ws_token(websocket: WebSocket) -> None:
-    """Validate JWT from ?token= query param before accepting the connection.
-
-    Closes the connection with code 4001 if the token is invalid.
-    Raises ValueError so the caller can return early without calling accept().
-    """
-    if not settings.booth_access_token:
-        return
-    token = websocket.query_params.get("token", "")
-    if not token:
-        await websocket.close(code=4001)
-        raise ValueError("Missing WebSocket token.")
-    try:
-        decode_token(token)
-    except jwt.InvalidTokenError as exc:
-        await websocket.close(code=4001)
-        raise ValueError(f"Invalid WebSocket token: {exc}")
+class WSAuthError(Exception):
+    """Raised when WebSocket authentication fails."""
+    pass
 
 
 async def require_admin(request: Request) -> None:
@@ -355,7 +341,7 @@ async def require_user(request: Request) -> dict:
 _ROLE_RANK: dict[str, int] = {"interpreter": 1, "room_coordinator": 2, "event_owner": 3, "super_admin": 4}
 
 
-def get_booth_session(request: Request) -> dict | None:
+def get_booth_session(request: Request | WebSocket) -> dict | None:
     """Return decoded JWT payload from either user_token (registered user) or session_token (invite link).
 
     Registered-user tokens (user_token) are checked FIRST so that a logged-in
@@ -374,6 +360,93 @@ def get_booth_session(request: Request) -> dict | None:
         except jwt.InvalidTokenError:
             continue
     return None
+
+
+async def resolve_ws_auth(websocket: WebSocket, booth_id: str) -> dict:
+
+    """Resolves authentication for a WebSocket connection"""
+
+    token = websocket.query_params.get("token", "")
+    if token:
+        try:
+            payload = decode_token(token)
+        except jwt.InvalidTokenError:
+            await websocket.close(code=4001)
+            raise WSAuthError("Invalid WebSocket token.")
+
+        # Check Token Scope
+        if payload.get("is_admin") or payload.get("admin"):
+            return payload
+
+        token_event = payload.get("event_slug", "")
+        if payload.get("role") == "listener":
+            if not token_event or not booth_id.startswith(f"{token_event}-"):
+                await websocket.close(code=4003)
+                raise WSAuthError("Listener token event_slug does not match booth_id.")
+            return payload
+
+        token_lang = payload.get("language_code", "")
+        if token_event and token_lang:
+            from portal.booth_identity import make_booth_id
+            try:
+                expected_booth_id = make_booth_id(token_event, token_lang)
+            except ValueError:
+                await websocket.close(code=4003)
+                raise WSAuthError("Invalid event or language in token.")
+            if expected_booth_id != booth_id:
+                await websocket.close(code=4003)
+                raise WSAuthError("Participant token scope does not match booth_id.")
+            return payload
+
+        if payload.get("role") or payload.get("is_admin") or payload.get("admin"):
+            return payload
+
+
+    if not settings.booth_access_token:
+        return get_booth_session(websocket) or {}
+
+    # Origin Check for Cookie fallback
+    origin = websocket.headers.get("origin")
+    if origin:
+        from urllib.parse import urlparse
+        expected_host = urlparse(settings.public_base_url).netloc
+        actual_host = urlparse(origin).netloc or origin
+        allowed_hosts = {expected_host, websocket.url.netloc}
+
+        if actual_host not in allowed_hosts:
+            await websocket.close(code=4003)
+            raise WSAuthError("Origin mismatch.")
+
+    # Cookie Fallback
+    payload = get_booth_session(websocket)
+    if not payload:
+        await websocket.close(code=4001)
+        raise WSAuthError("Missing WebSocket token and session cookie.")
+
+    # Check Cookie Scope
+    if payload.get("is_admin") or payload.get("admin"):
+        return payload
+
+    token_event = payload.get("event_slug", "")
+    if payload.get("role") == "listener":
+        if not token_event or not booth_id.startswith(f"{token_event}-"):
+            await websocket.close(code=4003)
+            raise WSAuthError("Listener cookie event_slug does not match booth_id.")
+        return payload
+
+    token_lang = payload.get("language_code", "")
+    if token_event and token_lang:
+        from portal.booth_identity import make_booth_id
+        try:
+            expected_booth_id = make_booth_id(token_event, token_lang)
+        except ValueError:
+            await websocket.close(code=4003)
+            raise WSAuthError("Invalid event or language in cookie.")
+        if expected_booth_id != booth_id:
+            await websocket.close(code=4003)
+            raise WSAuthError("Participant cookie scope does not match booth_id.")
+
+    return payload
 
 
 async def resolve_booth_role(payload: dict | None, booth_id: str | None = None) -> str | None:

@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 import httpx
 import jwt as pyjwt
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 
@@ -120,6 +120,7 @@ async def _ensure_mediamtx_path(channel_id: str) -> None:
 
 
 def _require_access(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None,
     token_query: str | None = None,
 ) -> None:
@@ -136,6 +137,15 @@ def _require_access(
             pass
     if token_query and token_query == settings.booth_access_token:
         return
+
+    # Cookie Fallback
+    from portal.auth import get_booth_session
+    payload = get_booth_session(request)
+    if payload:
+        if payload.get("role") == "listener":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Listener tokens cannot be used for this API.")
+        return
+
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid or missing auth token.")
 
 

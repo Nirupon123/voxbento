@@ -3,12 +3,9 @@ from __future__ import annotations
 import json
 import logging
 
-import jwt as _pyjwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from portal.auth import resolve_booth_role, verify_ws_token
-from portal.booth_identity import make_booth_id as _make_booth_id
-from portal.config import settings
+from portal.auth import WSAuthError, resolve_booth_role, resolve_ws_auth
 from portal.globals import booths
 from portal.websockets.manager import (
     Session,
@@ -29,79 +26,21 @@ from portal.websockets.manager import (
 _log = logging.getLogger(__name__)
 
 
-def _decode_ws_listener_token(websocket: WebSocket) -> dict | None:
-    """Decode a JWT from the ?token= query param, returning the payload or None."""
-    raw = websocket.query_params.get("token", "")
-    if not raw:
-        return None
-    try:
-        return _pyjwt.decode(raw, settings.effective_jwt_secret, algorithms=["HS256"])
-    except _pyjwt.InvalidTokenError:
-        return None
-
-
 router = APIRouter()
 
 
 @router.websocket("/ws/booth/{booth_id}")
 async def ws_booth(websocket: WebSocket, booth_id: str) -> None:
     try:
-        await verify_ws_token(websocket)
-    except ValueError:
+        payload = await resolve_ws_auth(websocket, booth_id)
+    except WSAuthError:
         return
 
-    # Derive granted_role from cookies at connect time — never trust client data.
-    ws_cookies = websocket.cookies
-    ws_session_payload: dict | None = None
-    for cookie_name in ("admin_token", "user_token", "session_token"):
-        raw = ws_cookies.get(cookie_name, "")
-        if not raw:
-            continue
-        try:
-            import jwt as _pyjwt
-
-            ws_session_payload = _pyjwt.decode(
-                raw,
-                settings.effective_jwt_secret,
-                algorithms=["HS256"],
-            )
-            break
-        except _pyjwt.InvalidTokenError:
-            continue
-        except Exception as e:
-            import logging
-
-            logging.getLogger(__name__).warning(f"Failed to decode token: {e}")
-            continue
-
-    ws_granted_role = await resolve_booth_role(ws_session_payload, booth_id)
-
-    # Reject listener tokens entirely from the booth management WebSocket.
-    # Listener tokens are only valid for /ws/captions/{booth_id}.
-    if ws_session_payload is not None and ws_session_payload.get("role") == "listener":
-        await websocket.close(code=4003)
-        return
-    query_payload = _decode_ws_listener_token(websocket)
-    if query_payload and query_payload.get("role") == "listener":
+    if payload and payload.get("role") == "listener":
         await websocket.close(code=4003)
         return
 
-    # Validate invite/participant token scope: the token's (event_slug, language_code)
-    # must match the booth being connected to.  This prevents a valid token for booth A
-    # from being used to join booth B.
-    if ws_session_payload is not None and "role" in ws_session_payload:
-        token_event = ws_session_payload.get("event_slug", "")
-        token_lang = ws_session_payload.get("language_code", "")
-        if token_event and token_lang:
-            try:
-                expected_booth_id = _make_booth_id(token_event, token_lang)
-                if expected_booth_id != booth_id:
-                    await websocket.close(code=4003)
-                    return
-            except Exception:
-                await websocket.close(code=4003)
-                return
-
+    ws_granted_role = await resolve_booth_role(payload, booth_id)
     await websocket.accept()
     session = Session(
         booth_id=booth_id,
@@ -161,28 +100,10 @@ async def ws_booth(websocket: WebSocket, booth_id: str) -> None:
 @router.websocket("/ws/captions/{booth_id}")
 async def ws_captions(websocket: WebSocket, booth_id: str) -> None:
     """WebSocket endpoint for live captions. Listener tokens are limited to their own event"""
-    if settings.booth_access_token:
-        payload = _decode_ws_listener_token(websocket)
-        if payload is None:
-            await websocket.close(code=4001)
-            return
-        # For listener tokens, enforce event_slug with booth_id binding.
-        if payload.get("role") == "listener":
-            token_event_slug = payload.get("event_slug", "")
-            if not token_event_slug:
-                await websocket.close(code=4003)
-                return
-            # booth_id is composed of <event_slug>-<language_code>; it must start
-            # with the token's event_slug to confirm this token is scoped here.
-            expected_prefix = f"{token_event_slug}-"
-            if not booth_id.startswith(expected_prefix):
-                _log.warning(
-                    "Listener token event_slug=%r does not match booth_id=%r — rejecting.",
-                    token_event_slug,
-                    booth_id,
-                )
-                await websocket.close(code=4003)
-                return
+    try:
+        await resolve_ws_auth(websocket, booth_id)
+    except WSAuthError:
+        return
     await websocket.accept()
     listener_manager.add(websocket, booth_id)
     try:

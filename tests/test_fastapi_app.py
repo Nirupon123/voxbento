@@ -582,6 +582,84 @@ def test_ws_auth_required_with_token(monkeypatch):
     assert res_bad.status_code == 401
 
 
+def test_ws_auth_invalid_token_fails_fast(monkeypatch):
+    """When ?token= is provided but invalid, connection is rejected even with valid cookies, regardless of flag."""
+    from fastapi.websockets import WebSocketDisconnect
+
+    # Test with flag OFF
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect("/ws/booth/auth-test?token=invalid-token", cookies=_ws_auth()) as ws:
+            ws.receive_text()
+    assert exc_info.value.code == 4001
+
+    # Test with flag ON
+    from portal.config import settings
+    monkeypatch.setattr(settings, "booth_access_token", "secret-test-token")
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect("/ws/booth/auth-test?token=invalid-token", cookies=_ws_auth()) as ws:
+            ws.receive_text()
+    assert exc_info.value.code == 4001
+
+
+def test_ws_auth_valid_generic_token_without_cookie_rejected(monkeypatch):
+    """A cryptographically valid API token with no role falls back to the cookie.
+    If no cookie is present, it must cleanly reject the connection."""
+    from portal.config import settings
+    monkeypatch.setattr(settings, "booth_access_token", "secret-test-token")
+    from fastapi.websockets import WebSocketDisconnect
+
+    # Get a valid API token (which has no role claims)
+    res = client.post("/api/auth/token", json={"token": "secret-test-token"})
+    assert res.status_code == 200
+    jwt_token = res.json()["access_token"]
+
+    # Connect with the valid API token but NO cookie
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(f"/ws/booth/auth-test?token={jwt_token}") as ws:
+            ws.receive_text()
+    assert exc_info.value.code == 4001
+
+def test_ws_auth_cookie_bola_rejected(monkeypatch):
+    """A valid cookie for one booth cannot be used to connect to a different booth (BOLA)."""
+    from portal.config import settings
+    monkeypatch.setattr(settings, "booth_access_token", "secret-test-token")
+    from fastapi.websockets import WebSocketDisconnect
+
+    # Valid cookie for 'other-booth'
+    cookie = _interpreter_cookie("other-booth", "en")
+
+    # Connecting to 'target-booth' should reject with 4003
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect("/ws/booth/target-booth-en", cookies=cookie) as ws:
+            ws.receive_text()
+    assert exc_info.value.code == 4003
+
+
+def test_ws_auth_cswsh_protection(monkeypatch):
+    """If Origin header is present and mismatches settings.public_base_url, reject."""
+    from fastapi.websockets import WebSocketDisconnect
+
+    from portal.config import settings
+
+    monkeypatch.setattr(settings, "booth_access_token", "secret-test-token")
+    monkeypatch.setattr(settings, "public_base_url", "https://voxbento.com")
+
+    # Mismatched origin
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect("/ws/booth/auth-test", cookies=_ws_auth(), headers={"Origin": "https://evil.com"}) as ws:
+            ws.receive_text()
+    assert exc_info.value.code == 4003
+
+    # Matching origin
+    with client.websocket_connect("/ws/booth/auth-test", cookies=_ws_auth(), headers={"Origin": "https://voxbento.com"}) as ws:
+        ws.send_text(json.dumps({
+            "type": "booth:join", "display_name": "AuthUser", "role": "interpreter",
+            "language": "English", "channel_id": "auth-test-audio"
+        }))
+        msg = json.loads(ws.receive_text())
+        assert msg["type"] in ("booth:joined", "booth:state")
+
+
 def test_ws_coordinator_can_switch_active_interpreter():
     """Coordinator assigns a second interpreter as active; state broadcast reflects the change."""
     with (

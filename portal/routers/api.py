@@ -45,7 +45,7 @@ async def provision_listener_token(
 
 
 @router.delete("/events/{event_slug}/booths/{language_code}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_event_booth(
+async def delete_booth_by_language(
     request: Request,
     event_slug: str,
     language_code: str,

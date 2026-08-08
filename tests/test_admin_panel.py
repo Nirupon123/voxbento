@@ -552,9 +552,11 @@ class TestAdminToken:
         payload = decode_token(token)
         assert isinstance(payload, dict)
 
+
 # ---------------------------------------------------------------------------
 # API Key Tests
 # ---------------------------------------------------------------------------
+
 
 class TestAPIKeyBOLA:
     @pytest.mark.anyio
@@ -720,9 +722,7 @@ class TestAPIKeyCRUD:
 
             # Manually verify that it uses HMAC-SHA256 with the server secret
             expected_hash = hmac.new(
-                settings.effective_jwt_secret.encode("utf-8"),
-                raw_key.encode("utf-8"),
-                hashlib.sha256
+                settings.effective_jwt_secret.encode("utf-8"), raw_key.encode("utf-8"), hashlib.sha256
             ).hexdigest()
 
             assert verified_key.key_hash == expected_hash
@@ -745,10 +745,7 @@ class TestListenerTokenAPI:
             api_key, raw_key = await create_api_key(session, event.id, "Test Key")
 
         async with _client() as client:
-            response = await client.post(
-                "/api/v1/tokens/listener",
-                headers={"Authorization": f"Bearer {raw_key}"}
-            )
+            response = await client.post("/api/v1/tokens/listener", headers={"Authorization": f"Bearer {raw_key}"})
             assert response.status_code == 201
             data = response.json()
             assert "token" in data
@@ -757,8 +754,7 @@ class TestListenerTokenAPI:
         # Verify usage metric was logged
         async with get_session() as session:
             stmt = select(UsageMetric).where(
-                UsageMetric.event_id == event.id,
-                UsageMetric.metric_name == "listener_token_issued"
+                UsageMetric.event_id == event.id, UsageMetric.metric_name == "listener_token_issued"
             )
             result = await session.execute(stmt)
             metric = result.scalar_one_or_none()
@@ -770,6 +766,7 @@ class TestListenerTokenAPI:
         from httpx import AsyncClient
 
         from portal.database import create_api_key, create_event, get_session
+
         async with get_session() as session:
             event = await create_event(session, slug="api-test-event-invalid", display_name="API Test Event Invalid")
             api_key, raw_key = await create_api_key(session, event.id, "Test Key")
@@ -780,17 +777,13 @@ class TestListenerTokenAPI:
 
         async with _client() as client:
             # Test revoked key
-            response1 = await client.post(
-                "/api/v1/tokens/listener",
-                headers={"Authorization": f"Bearer {raw_key}"}
-            )
+            response1 = await client.post("/api/v1/tokens/listener", headers={"Authorization": f"Bearer {raw_key}"})
             assert response1.status_code == 401
             assert response1.json() == {"detail": "Invalid API Key"}
 
             # Test fake key
             response2 = await client.post(
-                "/api/v1/tokens/listener",
-                headers={"Authorization": "Bearer vb_fakekeythatdoesntexist"}
+                "/api/v1/tokens/listener", headers={"Authorization": "Bearer vb_fakekeythatdoesntexist"}
             )
             assert response2.status_code == 401
             assert response2.json() == {"detail": "Invalid API Key"}
@@ -801,25 +794,25 @@ class TestListenerTokenAPI:
     @pytest.mark.anyio
     async def test_provision_listener_token_missing_header(self, setup_db):
         from httpx import AsyncClient
+
         async with _client() as client:
             response = await client.post("/api/v1/tokens/listener")
             assert response.status_code == 401
             assert response.json() == {"detail": "Missing or invalid Bearer token"}
 
-            response = await client.post(
-                "/api/v1/tokens/listener",
-                headers={"Authorization": "Basic something"}
-            )
+            response = await client.post("/api/v1/tokens/listener", headers={"Authorization": "Basic something"})
             assert response.status_code == 401
             assert response.json() == {"detail": "Missing or invalid Bearer token"}
 
     @pytest.mark.anyio
     async def test_provision_listener_token_rate_limit(self, setup_db):
         from portal.rate_limit import _rates
+
         _rates.clear()
         from httpx import AsyncClient
 
         from portal.database import create_api_key, create_event, get_session
+
         async with get_session() as session:
             event = await create_event(session, slug="api-test-event-rate", display_name="API Test Event Rate")
             api_key, raw_key = await create_api_key(session, event.id, "Test Key Rate")
@@ -827,24 +820,17 @@ class TestListenerTokenAPI:
         async with _client() as client:
             # Hit the endpoint 60 times, should all be 201 (since max_requests=60)
             for _ in range(60):
-                response = await client.post(
-                    "/api/v1/tokens/listener",
-                    headers={"Authorization": f"Bearer {raw_key}"}
-                )
+                response = await client.post("/api/v1/tokens/listener", headers={"Authorization": f"Bearer {raw_key}"})
                 assert response.status_code == 201
 
             # The 61st request should be rate limited
-            response = await client.post(
-                "/api/v1/tokens/listener",
-                headers={"Authorization": f"Bearer {raw_key}"}
-            )
+            response = await client.post("/api/v1/tokens/listener", headers={"Authorization": f"Bearer {raw_key}"})
             assert response.status_code == 429
             assert response.json() == {"detail": "Too many requests"}
 
     @pytest.mark.anyio
     async def test_listener_token_cross_event_ws_captions_rejected(self, setup_db):
-        """A listener JWT scoped to event-a must not be accepted on event-b's captions WS
-        """
+        """A listener JWT scoped to event-a must not be accepted on event-b's captions WS"""
         import os
 
         from httpx import ASGITransport, AsyncClient
@@ -864,6 +850,7 @@ class TestListenerTokenAPI:
 
             tc = TestClient(app=fastapi_app)
             from starlette.websockets import WebSocketDisconnect
+
             booth_id_event_b = "event-b-english"
             with pytest.raises(WebSocketDisconnect) as exc_info:
                 with tc.websocket_connect(
@@ -924,6 +911,7 @@ class TestListenerTokenAPI:
 
             tc = TestClient(app=fastapi_app)
             from starlette.websockets import WebSocketDisconnect
+
             with pytest.raises(WebSocketDisconnect) as exc_info:
                 with tc.websocket_connect(
                     f"/ws/booth/event-a-english?token={token}",

@@ -826,11 +826,21 @@ def parse_audio_delay_ms(value: object) -> int:
 class APIKeyCreateRequest(BaseModel):
     name: str
 
+
 @router.get("/admin/api/events/{event_id}/api-keys", dependencies=[Depends(require_event_owner)])
 async def admin_list_api_keys(request: Request, event_id: int):
     async with get_session() as session:
         keys = await get_api_keys_for_event(session, event_id)
-        return [{"id": k.id, "name": k.name, "preview": k.preview, "created_at": k.created_at.isoformat(), "active": k.active} for k in keys]
+        return [
+            {
+                "id": k.id,
+                "name": k.name,
+                "preview": k.preview,
+                "created_at": k.created_at.isoformat(),
+                "active": k.active,
+            }
+            for k in keys
+        ]
 
 
 @router.post("/admin/api/events/{event_id}/api-keys", dependencies=[Depends(require_event_owner)])
@@ -845,13 +855,13 @@ async def admin_create_api_key(request: Request, event_id: int, data: APIKeyCrea
 
         # Check if active key with same name exists for this event
         stmt = select(EventAPIKey).where(
-            EventAPIKey.event_id == event_id,
-            EventAPIKey.name == data.name.strip(),
-            EventAPIKey.active
+            EventAPIKey.event_id == event_id, EventAPIKey.name == data.name.strip(), EventAPIKey.active
         )
         existing = await session.execute(stmt)
         if existing.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail=f"An active API Key named '{data.name.strip()}' already exists.")
+            raise HTTPException(
+                status_code=400, detail=f"An active API Key named '{data.name.strip()}' already exists."
+            )
 
         api_key, raw_key = await create_api_key(session, event_id, data.name.strip())
         return {
@@ -859,7 +869,7 @@ async def admin_create_api_key(request: Request, event_id: int, data: APIKeyCrea
             "name": api_key.name,
             "preview": api_key.preview,
             "created_at": api_key.created_at.isoformat(),
-            "raw_key": raw_key
+            "raw_key": raw_key,
         }
 
 

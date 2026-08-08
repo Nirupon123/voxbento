@@ -537,7 +537,14 @@ class EventAPIKey(Base):
     __tablename__ = "event_api_keys"
 
     __table_args__ = (
-        Index("ix_event_api_keys_active_name", "event_id", "name", unique=True, postgresql_where=sa.text("active"), sqlite_where=sa.text("active")),
+        Index(
+            "ix_event_api_keys_active_name",
+            "event_id",
+            "name",
+            unique=True,
+            postgresql_where=sa.text("active"),
+            sqlite_where=sa.text("active"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

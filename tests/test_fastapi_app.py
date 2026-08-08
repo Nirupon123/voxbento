@@ -1101,12 +1101,12 @@ def test_create_event_booth():
     assert body["whep_url"].endswith("/pycon2026/en/whep")
 
 
-def test_create_event_booth_duplicate_returns_400():
-    """Creating the same booth twice returns 400."""
+def test_create_event_booth_duplicate_returns_existing():
+    """Creating the same booth twice returns the existing booth data."""
     client.post("/api/events/duptest/booths", json={"language_code": "fr", "language": "French"})
     res = client.post("/api/events/duptest/booths", json={"language_code": "fr", "language": "French"})
-    assert res.status_code == 400
-    assert "already exists" in res.json()["detail"]
+    assert res.status_code == 201
+    assert res.json()["booth_id"] == "duptest-fr"
 
 
 def test_create_event_booth_invalid_language_code():

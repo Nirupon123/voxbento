@@ -91,7 +91,6 @@ async def test_local_provider_eviction_respects_ref_count():
     assert model_size not in _loaded_models
 
 
-
 @pytest.mark.anyio
 async def test_eviction_loop_does_not_block_on_model_load():
     model_size = "test-model-slow-load"
@@ -109,9 +108,11 @@ async def test_eviction_loop_does_not_block_on_model_load():
         return model_size
 
     def background_loader():
-        with patch("huggingface_hub.snapshot_download", side_effect=simulated_slow_download), \
-             patch("ctranslate2.Translator"), \
-             patch("transformers.AutoTokenizer.from_pretrained"):
+        with (
+            patch("huggingface_hub.snapshot_download", side_effect=simulated_slow_download),
+            patch("ctranslate2.Translator"),
+            patch("transformers.AutoTokenizer.from_pretrained"),
+        ):
             from portal.translations.providers.local import get_model_and_tokenizer
 
             get_model_and_tokenizer(model_size)

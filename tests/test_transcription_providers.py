@@ -128,6 +128,7 @@ class TestTranscriptionProviders:
         def background_loader():
             with patch("faster_whisper.WhisperModel", side_effect=simulated_slow_load):
                 from portal.transcription.providers.local import get_model
+
                 get_model(model_size)
 
         t = threading.Thread(target=background_loader)
@@ -171,7 +172,7 @@ class TestTranscriptionProviders:
                 no_speech_threshold=0.6,
                 log_prob_threshold=-1.0,
                 condition_on_previous_text=False,
-                **kwargs
+                **kwargs,
             ):
                 pass
 

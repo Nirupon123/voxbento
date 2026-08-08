@@ -776,6 +776,7 @@ async def save_transcript_segment(booth_id_str: str, text: str, room_id: int | N
         logger.error(f"Failed to save transcript segment: {e}")
         return None
 
+
 # ---------------------------------------------------------------------------
 # API Keys & Metrics (Embeddable B2B)
 # ---------------------------------------------------------------------------
@@ -786,18 +787,14 @@ async def create_api_key(session: AsyncSession, event_id: int, name: str | None 
     raw_key = f"vb_{raw_secret}"
 
     # HMAC-SHA256 hash for O(1) lookup
-    key_hash = hmac.new(settings.effective_jwt_secret.encode("utf-8"), raw_key.encode("utf-8"), hashlib.sha256).hexdigest()
+    key_hash = hmac.new(
+        settings.effective_jwt_secret.encode("utf-8"), raw_key.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
 
     # preview: vb_ + last 4 chars
     preview = f"vb_...{raw_key[-4:]}"
 
-    api_key = EventAPIKey(
-        event_id=event_id,
-        name=name,
-        preview=preview,
-        key_hash=key_hash,
-        active=True
-    )
+    api_key = EventAPIKey(event_id=event_id, name=name, preview=preview, key_hash=key_hash, active=True)
     session.add(api_key)
     await log_usage_metric(session, event_id, "api_key_created")
     await session.flush()
@@ -805,10 +802,11 @@ async def create_api_key(session: AsyncSession, event_id: int, name: str | None 
 
 
 async def get_api_keys_for_event(session: AsyncSession, event_id: int) -> list[EventAPIKey]:
-    stmt = select(EventAPIKey).where(
-        EventAPIKey.event_id == event_id,
-        EventAPIKey.active.is_(True)
-    ).order_by(EventAPIKey.created_at.desc())
+    stmt = (
+        select(EventAPIKey)
+        .where(EventAPIKey.event_id == event_id, EventAPIKey.active.is_(True))
+        .order_by(EventAPIKey.created_at.desc())
+    )
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
@@ -825,8 +823,14 @@ async def revoke_api_key(session: AsyncSession, key_id: int, event_id: int) -> b
 
 
 async def verify_api_key(session: AsyncSession, raw_key: str) -> EventAPIKey | None:
-    key_hash = hmac.new(settings.effective_jwt_secret.encode("utf-8"), raw_key.encode("utf-8"), hashlib.sha256).hexdigest()
-    stmt = select(EventAPIKey).where(EventAPIKey.key_hash == key_hash, EventAPIKey.active).options(selectinload(EventAPIKey.event))
+    key_hash = hmac.new(
+        settings.effective_jwt_secret.encode("utf-8"), raw_key.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    stmt = (
+        select(EventAPIKey)
+        .where(EventAPIKey.key_hash == key_hash, EventAPIKey.active)
+        .options(selectinload(EventAPIKey.event))
+    )
     result = await session.execute(stmt)
     key = result.scalar_one_or_none()
     if key:
@@ -835,10 +839,6 @@ async def verify_api_key(session: AsyncSession, raw_key: str) -> EventAPIKey | N
 
 
 async def log_usage_metric(session: AsyncSession, event_id: int, metric_name: str, value: int = 1) -> None:
-    metric = UsageMetric(
-        event_id=event_id,
-        metric_name=metric_name,
-        value=value
-    )
+    metric = UsageMetric(event_id=event_id, metric_name=metric_name, value=value)
     session.add(metric)
     await session.flush()

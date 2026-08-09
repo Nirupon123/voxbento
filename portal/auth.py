@@ -58,6 +58,26 @@ def create_listener_token(*, event_slug: str) -> str:
     return jwt.encode(payload, settings.effective_jwt_secret, algorithm="HS256")
 
 
+def create_embed_token(*, event_slug: str) -> str:
+    """Create a short-lived JWT for embed iframe access.
+
+    Identical claim shape to create_listener_token (role='listener', event_slug)
+    so it passes both the embed route's claim checks and the /ws/captions
+    WebSocket auth's booth_id.startswith(event_slug + '-') check.
+    Uses a shorter expiry (embed_token_expiry_seconds, default 30 min) because
+    the token is visible in the iframe src= attribute in the third party's HTML.
+    """
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "role": "listener",
+        "event_slug": event_slug,
+        "iat": now,
+        "exp": now + timedelta(seconds=settings.embed_token_expiry_seconds),
+    }
+    return jwt.encode(payload, settings.effective_jwt_secret, algorithm="HS256")
+
+
 def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.effective_jwt_secret, algorithms=["HS256"])
 
@@ -380,7 +400,7 @@ async def resolve_ws_auth(websocket: WebSocket, booth_id: str) -> dict:
 
         token_event = payload.get("event_slug", "")
         if payload.get("role") == "listener":
-            if not token_event or not booth_id.startswith(f"{token_event}-"):
+            if not token_event or not (booth_id.startswith(f"{token_event}-") or booth_id.startswith(f"{token_event}/")):
                 await websocket.close(code=4003)
                 raise WSAuthError("Listener token event_slug does not match booth_id.")
             return payload

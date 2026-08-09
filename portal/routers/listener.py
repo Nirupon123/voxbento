@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+import jwt
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
 
-from portal.auth import get_booth_session
+from portal.auth import decode_token, get_booth_session
 from portal.config import settings
 from portal.database import (
     get_event_by_slug,
@@ -20,6 +22,12 @@ from portal.database import (
 )
 from portal.globals import _JS_CACHE_BUST
 from portal.utils import _ensure_mediamtx_path
+
+# Allowlists for embed theming params — no free-text values accepted.
+_ALLOWED_THEMES = {"dark", "light"}
+_ALLOWED_FONTS = {"inter", "roboto", "outfit"}
+_PRIMARY_COLOR_RE = re.compile(r"^[0-9a-fA-F]{3,6}$")
+_DEFAULT_PRIMARY = "3b82f6"  # VoxBento blue
 
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent
 templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
@@ -179,3 +187,115 @@ async def listener_room_audio_delay(
         if room is None or room.event_id != ev.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
         return {"audio_delay_ms": room.audio_delay_ms}
+
+
+@router.get("/embed/{event_slug}/{language_code}")
+async def embed_listener(
+    request: Request,
+    event_slug: str,
+    language_code: str,
+    token: str = Query(""),
+    theme: str = Query("dark"),
+    primary_color: str = Query(_DEFAULT_PRIMARY, alias="primaryColor"),
+    font: str = Query("inter"),
+    captions: bool = Query(False),
+    custom_css_url: str | None = Query(None, alias="customCssUrl"),
+):
+    """Serve a standalone, iframe-safe listener embed.
+
+    Authentication: requires a listener JWT in the ?token= query parameter.
+    The token must carry role='listener' and event_slug matching the URL.
+    Use POST /api/v1/tokens/listener?purpose=embed to obtain a 30-minute token.
+
+    Theming: accepts ?theme=dark|light, ?primaryColor=<hex>, ?font=inter|roboto|outfit.
+    All theming values are strictly validated server-side.
+    """
+    # ── Authentication ────────────────────────────────────────────────────
+    if not token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing embed token.")
+
+    try:
+        payload = decode_token(token)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Embed token has expired.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid embed token.")
+
+    # Explicit claim checks — .get() only, never bare key access
+    if payload.get("role") != "listener":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token is not a listener token.")
+    if payload.get("event_slug") != event_slug:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token is not valid for this event.")
+
+    # ── Resolve booth ─────────────────────────────────────────────────────
+    from portal.database import list_booths_for_event
+
+    async with get_session() as session:
+        ev = await get_event_by_slug(session, event_slug)
+        if not ev:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+
+        if language_code.lower() != "floor":
+            db_booths = await list_booths_for_event(session, ev.id)
+
+    if language_code.lower() == "floor":
+        channel_id = f"{ev.slug}/floor"
+        booth_id = f"{ev.slug}-floor"
+    else:
+        booth = next(
+            (b for b in db_booths if b.language_code.lower() == language_code.lower()),
+            None,
+        )
+        if booth is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No booth for language '{language_code}' in event '{event_slug}'.",
+            )
+        channel_id = booth.mediamtx_path
+        booth_id = f"{ev.slug}-{language_code.lower()}"
+    whep_url = f"{settings.mediamtx_whip_base}/{channel_id}/whep"
+    host = settings.public_base_url.replace("https://", "").replace("http://", "")
+    caption_url = f"wss://{host}/ws/captions/{booth_id}"
+
+    # ── Sanitize theming params ───────────────────────────────────────────
+    safe_theme = theme if theme in _ALLOWED_THEMES else "dark"
+    safe_font = font if font in _ALLOWED_FONTS else "inter"
+    safe_primary = primary_color if _PRIMARY_COLOR_RE.match(primary_color) else _DEFAULT_PRIMARY
+
+    safe_custom_css = None
+    if custom_css_url and custom_css_url.startswith("https://"):
+        safe_custom_css = custom_css_url
+
+    # ── Security headers ─────────────────────────────────────────────────
+    if settings.embed_allowed_origins.strip():
+        origins = " ".join(
+            o.strip() for o in settings.embed_allowed_origins.split(",") if o.strip()
+        )
+        frame_ancestors = f"frame-ancestors {origins}"
+    else:
+        frame_ancestors = "frame-ancestors *"
+
+    response_headers = {
+        "Cache-Control": "no-store, private",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": frame_ancestors,
+    }
+
+    context = {
+        "event_slug": event_slug,
+        "language_code": language_code,
+        "whep_url": whep_url,
+        "caption_url": caption_url,
+        "token": token,
+        "theme": safe_theme,
+        "primary_color": safe_primary,
+        "font_family": safe_font.capitalize(),
+        "captions_enabled": captions,
+        "custom_css_url": safe_custom_css,
+        "target_lang_code": language_code.lower(),
+        "js_version": _JS_CACHE_BUST,
+    }
+
+    return templates.TemplateResponse(
+        request, "embed.html", context, headers=response_headers
+    )

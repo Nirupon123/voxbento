@@ -5,7 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from portal.auth import create_listener_token, security
+from portal.auth import create_embed_token, create_listener_token, security
 from portal.booth_identity import make_booth_id, make_mediamtx_path
 from portal.config import settings
 from portal.database import create_invite_token, get_session, log_usage_metric, verify_api_key
@@ -26,7 +26,15 @@ bearer_scheme = HTTPBearer(auto_error=False)
 async def provision_listener_token(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    purpose: str | None = Query(None),
 ):
+    """Issue a listener JWT for a third-party client.
+
+    - Default (no purpose param): 4-hour token for WebSocket listener use.
+    - purpose=embed: 30-minute token for embedding in an iframe src= attribute.
+      The shorter lifetime limits exposure since the token is visible in the
+      third party's page HTML source.
+    """
     ip_address = request.client.host if request.client else "unknown"
     if not check_rate_limit("api_token_provision", ip_address, max_requests=60, window_seconds=60):
         raise HTTPException(status_code=429, detail="Too many requests")
@@ -40,7 +48,10 @@ async def provision_listener_token(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key")
 
         await log_usage_metric(session, key.event_id, "listener_token_issued")
-        token = create_listener_token(event_slug=key.event.slug)
+        if purpose == "embed":
+            token = create_embed_token(event_slug=key.event.slug)
+        else:
+            token = create_listener_token(event_slug=key.event.slug)
         return {"token": token}
 
 

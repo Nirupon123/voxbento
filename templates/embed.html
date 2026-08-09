@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!--
+    Security-first head order:
+    1. referrer meta  — prevents the page URL (including ?token=) leaking to Google Fonts
+    2. robots meta    — standard practice for token-bearing URLs
+    3. charset / viewport
+    4. external font  — fired after referrer policy is established
+    5. inline styles  — CSS variables from server-sanitised theming params only
+  -->
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoxBento Audio</title>
+
+  <!-- Google Font — Referrer-Policy: no-referrer prevents ?token= leaking here -->
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family={{ font_family }}:wght@400;600;700&display=swap"
+  >
+
+  <!-- External Stylesheet -->
+  <link rel="stylesheet" href="{{ url_for('static', path='css/embed.css') }}?v={{ js_version }}" />
+
+  {% if custom_css_url %}
+  <!-- Third-Party Custom CSS Override -->
+  <link rel="stylesheet" href="{{ custom_css_url }}" />
+  {% endif %}
+
+  <style>
+    /* ── CSS variables — all values are server-sanitised ─────────────────── */
+    :root {
+      --primary:  #{{ primary_color }};
+      --font:     '{{ font_family }}', Inter, system-ui, sans-serif;
+      {% if theme == "dark" %}
+      --bg:       #0d0f10;
+      --surface:  #1a1d21;
+      --border:   #2a2d32;
+      --text:     #f1f5f9;
+      --muted:    #94a3b8;
+      {% else %}
+      --bg:       #f8f9fa;
+      --surface:  #ffffff;
+      --border:   #e2e8f0;
+      --text:     #0d0f10;
+      --muted:    #64748b;
+      {% endif %}
+    }
+  </style>
+</head>
+<body>
+
+  <audio id="embed-audio" style="display:none"></audio>
+
+  <div class="player">
+
+    <div class="status-row">
+      <div class="status-dot connecting" id="status-dot"></div>
+      <span id="status-text">Connecting&hellip;</span>
+    </div>
+
+    <button class="play-btn" id="play-btn" disabled>
+      &#9654;&nbsp; Play Audio
+    </button>
+
+    {% if captions_enabled %}
+    <div class="captions-box empty" id="captions-box">
+      Captions will appear here&hellip;
+    </div>
+    {% endif %}
+
+    <div class="footer">
+      Powered by <a href="https://voxbento.com" target="_blank" rel="noopener noreferrer">VoxBento</a>
+    </div>
+
+  </div>
+
+  <script src="/static/js/whep-listener.js?v={{ js_version }}"></script>
+
+  <script>
+    'use strict';
+
+    // All values injected via tojson — safe against ", \, and <\/script> injection.
+    const WHEP_URL    = {{ whep_url | tojson }};
+    const CAPTION_URL = {{ caption_url | tojson }};
+    const CAPTIONS_ON = {{ captions_enabled | tojson }};
+    const EMBED_TOKEN = {{ token | tojson }};
+
+    const audioEl    = document.getElementById('embed-audio');
+    const playBtn    = document.getElementById('play-btn');
+    const statusDot  = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    const captionsEl = document.getElementById('captions-box') || null;
+
+    let playing = false;
+
+    function setStatus(state, text) {
+      statusDot.className = 'status-dot ' + (state || '');
+      statusText.textContent = text;
+    }
+
+    function setExpired() {
+      setStatus('error', 'Session expired');
+      playBtn.textContent = '\u26a0 Session Expired \u2014 Reload Host Page';
+      playBtn.disabled = true;
+    }
+
+    const whep = createWhepClient();
+
+    whep.start({
+      whepUrl: WHEP_URL,
+      audioEl: audioEl,
+      onState: function(s) {
+        if (s.peerConnection === 'connected') {
+          setStatus('live', 'Live');
+          playBtn.disabled = false;
+          playBtn.textContent = playing ? '\u23f8  Pause' : '\u25b6  Play Audio';
+        } else if (s.peerConnection === 'failed' || s.peerConnection === 'closed') {
+          setStatus('error', 'Stream unavailable');
+          playBtn.disabled = false;
+        } else {
+          setStatus('connecting', 'Connecting\u2026');
+        }
+      },
+      onLog: function() {},
+    });
+
+    playBtn.addEventListener('click', function() {
+      if (!playing) {
+        audioEl.play().then(function() {
+          playing = true;
+          playBtn.textContent = '\u23f8  Pause';
+        }).catch(function() {
+          setStatus('error', 'Playback blocked \u2014 check browser permissions');
+        });
+      } else {
+        audioEl.pause();
+        playing = false;
+        playBtn.textContent = '\u25b6  Play Audio';
+      }
+    });
+
+    if (CAPTIONS_ON && captionsEl) {
+      var wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      // If CAPTION_URL starts with wss:// or ws:// (from backend), we can parse it, OR we can just replace the host.
+      // But it's easier to just construct it from scratch if the backend passed the full URL.
+      // Wait, let's just extract the path.
+      var urlPath = new URL(CAPTION_URL).pathname;
+      var wsUrl = wsProto + '//' + window.location.host + urlPath + '?token=' + encodeURIComponent(EMBED_TOKEN);
+      var captionWs = new WebSocket(wsUrl);
+      var TARGET_LANG = "{{ target_lang_code }}";
+
+      captionWs.onmessage = function(ev) {
+        try {
+          var msg = JSON.parse(ev.data);
+          var isValid = false;
+          
+          // Both the floor and human interpreter booths broadcast original captions as "caption"
+          if (msg.type === 'caption') {
+              isValid = true;
+          } else if (msg.type === 'translation' && msg.language_code === TARGET_LANG) {
+              isValid = true;
+          }
+
+          if (isValid && msg.text) {
+            captionsEl.textContent = msg.text;
+            captionsEl.classList.remove('empty');
+          }
+        } catch (_) {}
+      };
+
+      captionWs.onclose = function(ev) {
+        if (ev.code === 4001) { setExpired(); }
+      };
+    }
+  </script>
+
+</body>
+</html>

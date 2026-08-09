@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     jwt_expiry_seconds: int = 86400
     listener_token_expiry_seconds: int = 14400  # 4 hours
+    # Embed iframe tokens have a shorter lifetime because the token sits in a
+    # publicly visible iframe src= attribute, making it more easily copied.
+    embed_token_expiry_seconds: int = 1800  # 30 minutes
+    # Space-separated CSP frame-ancestors value for the /embed/ route.
+    # Input is comma-separated for human readability and converted to spaces internally.
+    # Empty string = frame-ancestors * (any site may embed).
+    embed_allowed_origins: str = ""
 
     # Database — SQLite for dev, PostgreSQL for prod
     database_url: str = "sqlite+aiosqlite:///./interpretation.db"

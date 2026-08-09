@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -56,14 +57,12 @@ async def lifespan(app: FastAPI):
 
     dg.track_task(asyncio.create_task(_gen()))
 
-    import logging
     logging.getLogger("uvicorn.access").addFilter(_UvicornTokenRedactor())
     yield
     if pg.shared_http_client:
         await pg.shared_http_client.aclose()
 
 
-import logging
 class _UvicornTokenRedactor(logging.Filter):
     import re as _re
     _TOKEN_RE = _re.compile(r"(?i)((?:^|&|\?)token=)[^&\s]*")

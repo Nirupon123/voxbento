@@ -56,8 +56,9 @@ _ws_auth = _admin_user_cookie
 
 def test_token_redactor_handles_combined_request_line():
     import logging
+
     from fastapi_app import _UvicornTokenRedactor
-    
+
     # Combined string shape (e.g. httptools protocol)
     record = logging.LogRecord(
         name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
@@ -72,8 +73,9 @@ def test_token_redactor_handles_combined_request_line():
 
 def test_token_redactor_handles_split_args():
     import logging
+
     from fastapi_app import _UvicornTokenRedactor
-    
+
     # Split string shape (e.g. h11 protocol)
     record = logging.LogRecord(
         name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,

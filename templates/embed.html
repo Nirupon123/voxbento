@@ -54,7 +54,7 @@
 
   <audio id="embed-audio" style="display:none"></audio>
 
-  <div class="player">
+  <div class="player {% if headless %}headless{% endif %}">
 
     <div class="status-row">
       <div class="status-dot connecting" id="status-dot"></div>
@@ -87,7 +87,10 @@
       "caption_url": {{ caption_url | tojson }},
       "captions_enabled": {{ captions_enabled | tojson }},
       "token": {{ token | tojson }},
-      "target_lang_code": "{{ target_lang_code }}"
+      "target_lang_code": "{{ target_lang_code }}",
+      "headless": {{ headless | tojson }},
+      "target_origin": {{ postmessage_target_origin | tojson }},
+      "allowed_origins": {{ allowed_origins_list | tojson }}
     }
   </script>
   <script src="/static/js/embed-player.js?v={{ js_version }}"></script>

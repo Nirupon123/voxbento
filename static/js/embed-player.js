@@ -48,6 +48,15 @@
       whepUrl: WHEP_URL,
       audioEl: audioEl,
       onState: function(s) {
+        if (config.headless) {
+          window.parent.postMessage({
+            source: 'voxbento-embed',
+            v: 1,
+            type: 'booth_state',
+            payload: { state: s.peerConnection }
+          }, config.target_origin);
+        }
+
         if (s.peerConnection === 'connected') {
           setStatus('live', 'Live');
           playBtn.disabled = false;
@@ -86,6 +95,9 @@
       var historyEl = document.getElementById('embed-caption-history');
       var currentEl = document.getElementById('embed-caption-current');
       var maxHistory = 50;
+      
+      var captionHistoryHeadless = [];
+      var maxHistoryHeadless = 2;
 
       captionWs.onmessage = function(ev) {
         try {
@@ -103,28 +115,56 @@
             var status = msg.type === 'translation' ? 'final' : (msg.status || 'final');
             var text = (msg.text || '').trim();
 
-            if (status === 'clear') {
-              currentEl.textContent = '';
-            } else if (status === 'final') {
-              if (text) {
-                var p = document.createElement('div');
-                p.textContent = text;
-                historyEl.appendChild(p);
-                while (historyEl.children.length > maxHistory) {
-                  historyEl.removeChild(historyEl.firstChild);
+            if (config.headless) {
+              if (status === 'clear') {
+                captionHistoryHeadless = [];
+                text = '';
+              } else if (status === 'final') {
+                if (text) {
+                  captionHistoryHeadless.push(text);
+                  if (captionHistoryHeadless.length > maxHistoryHeadless) {
+                    captionHistoryHeadless.shift();
+                  }
                 }
+                text = '';
               }
-              currentEl.textContent = '';
-            } else if (status === 'partial') {
-              currentEl.textContent = text;
-            }
+              var displayText = captionHistoryHeadless.concat(text ? [text] : []).join(' ');
 
-            if (historyEl.children.length === 0 && !currentEl.textContent) {
-              captionsEl.classList.add('empty');
+              window.parent.postMessage({
+                source: 'voxbento-embed',
+                v: 1,
+                type: 'subtitle',
+                payload: { 
+                  text: displayText, 
+                  language: TARGET_LANG,
+                  raw_status: status,
+                  raw_text: msg.text
+                }
+              }, config.target_origin);
             } else {
-              captionsEl.classList.remove('empty');
+              if (status === 'clear') {
+                currentEl.textContent = '';
+              } else if (status === 'final') {
+                if (text) {
+                  var p = document.createElement('div');
+                  p.textContent = text;
+                  historyEl.appendChild(p);
+                  while (historyEl.children.length > maxHistory) {
+                    historyEl.removeChild(historyEl.firstChild);
+                  }
+                }
+                currentEl.textContent = '';
+              } else if (status === 'partial') {
+                currentEl.textContent = text;
+              }
+
+              if (historyEl.children.length === 0 && !currentEl.textContent) {
+                captionsEl.classList.add('empty');
+              } else {
+                captionsEl.classList.remove('empty');
+              }
+              captionsEl.scrollTop = captionsEl.scrollHeight;
             }
-            captionsEl.scrollTop = captionsEl.scrollHeight;
           }
         } catch (_) {}
       };
@@ -132,6 +172,34 @@
       captionWs.onclose = function(ev) {
         if (ev.code === 4001) { setExpired(); }
       };
+    }
+
+    if (config.headless) {
+      window.addEventListener('message', function(event) {
+        if (config.allowed_origins.length > 0 && !config.allowed_origins.includes(event.origin)) return;
+        if (!event.data || event.data.source !== 'voxbento-parent') return;
+
+        if (event.data.type === 'play') {
+          audioEl.play().then(function() {
+            playing = true;
+          }).catch(function(err) {
+            window.parent.postMessage({
+              source: 'voxbento-embed',
+              v: 1,
+              type: 'error',
+              payload: { code: 'autoplay_blocked', message: err.message }
+            }, config.target_origin);
+          });
+        }
+        if (event.data.type === 'pause') {
+          audioEl.pause();
+          playing = false;
+        }
+        if (event.data.type === 'set_volume') {
+          const v = Number(event.data.volume);
+          if (v >= 0 && v <= 1) audioEl.volume = v;
+        }
+      });
     }
   });
 })();

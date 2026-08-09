@@ -32,6 +32,10 @@ body {
   gap: 14px;
 }
 
+.player.headless {
+  display: none !important;
+}
+
 /* ── Status bar ──────────────────────────────────────────────────────── */
 .status-row {
   display: flex;

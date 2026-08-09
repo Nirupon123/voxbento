@@ -200,6 +200,7 @@ async def embed_listener(
     font: str = Query("inter"),
     captions: bool = Query(False),
     custom_css_url: str | None = Query(None, alias="customCssUrl"),
+    headless: bool = Query(False),
 ):
     """Serve a standalone, iframe-safe listener embed.
 
@@ -267,13 +268,20 @@ async def embed_listener(
         safe_custom_css = custom_css_url
 
     # ── Security headers ─────────────────────────────────────────────────
-    if settings.embed_allowed_origins.strip():
-        origins = " ".join(
-            o.strip() for o in settings.embed_allowed_origins.split(",") if o.strip()
-        )
+    allowed_origins_list = [
+        o.strip() for o in settings.embed_allowed_origins.split(",") if o.strip()
+    ]
+    
+    if allowed_origins_list:
+        origins = " ".join(allowed_origins_list)
         frame_ancestors = f"frame-ancestors {origins}"
     else:
         frame_ancestors = "frame-ancestors *"
+
+    if len(allowed_origins_list) == 1:
+        postmessage_target_origin = allowed_origins_list[0]
+    else:
+        postmessage_target_origin = "*"
 
     response_headers = {
         "Cache-Control": "no-store, private",
@@ -294,6 +302,9 @@ async def embed_listener(
         "custom_css_url": safe_custom_css,
         "target_lang_code": language_code.lower(),
         "js_version": _JS_CACHE_BUST,
+        "headless": headless,
+        "postmessage_target_origin": postmessage_target_origin,
+        "allowed_origins_list": allowed_origins_list,
     }
 
     return templates.TemplateResponse(

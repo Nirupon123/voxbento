@@ -71,6 +71,7 @@ def create_embed_token(*, event_slug: str) -> str:
     payload = {
         "sub": str(uuid.uuid4()),
         "role": "listener",
+        "purpose": "embed",
         "event_slug": event_slug,
         "iat": now,
         "exp": now + timedelta(seconds=settings.embed_token_expiry_seconds),

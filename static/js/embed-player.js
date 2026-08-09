@@ -47,6 +47,7 @@
     whep.start({
       whepUrl: WHEP_URL,
       audioEl: audioEl,
+      audioDelayMs: config.audio_delay_ms,
       onState: function(s) {
         if (config.headless) {
           window.parent.postMessage({
@@ -115,6 +116,7 @@
             var status = msg.type === 'translation' ? 'final' : (msg.status || 'final');
             var text = (msg.text || '').trim();
 
+
             if (config.headless) {
               if (status === 'clear') {
                 captionHistoryHeadless = [];
@@ -164,6 +166,7 @@
                 captionsEl.classList.remove('empty');
               }
               captionsEl.scrollTop = captionsEl.scrollHeight;
+
             }
           }
         } catch (_) {}

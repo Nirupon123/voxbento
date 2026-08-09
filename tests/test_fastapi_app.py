@@ -1679,6 +1679,18 @@ def test_embed_xss_tojson_escaping():
     assert "</script><script>" not in res.text
 
 
+def test_embed_listener_token_purpose_enforcement():
+    """Verify that a normal listener token (without purpose='embed') is rejected by the embed route."""
+    from portal.auth import create_listener_token
+    
+    _seed_embed_event("test-event", "en")
+    token = create_listener_token(event_slug="test-event")
+    
+    res = client.get(f"/embed/test-event/en?token={token}", headers={"accept": "text/html"})
+    assert res.status_code == 403
+    assert "Token must be an embed token" in res.text
+
+
 def test_embed_cache_control_no_store():
     """Every embed response must carry Cache-Control: no-store, private."""
     _seed_embed_event("test-event", "en")

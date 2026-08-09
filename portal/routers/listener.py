@@ -271,7 +271,7 @@ async def embed_listener(
     allowed_origins_list = [
         o.strip() for o in settings.embed_allowed_origins.split(",") if o.strip()
     ]
-    
+
     if allowed_origins_list:
         origins = " ".join(allowed_origins_list)
         frame_ancestors = f"frame-ancestors {origins}"

@@ -1749,13 +1749,13 @@ def test_embed_headless_mode_config():
     """When headless=true, the config payload should contain headless: true and the class should be added."""
     _seed_embed_event("test-event", "en")
     token = _embed_listener_token(event_slug="test-event")
-    
+
     # Normal request
     res = client.get(f"/embed/test-event/en?token={token}", headers={"accept": "text/html"})
     assert res.status_code == 200
     assert "class=\"player headless\"" not in res.text
     assert "\"headless\": false" in res.text
-    
+
     # Headless request
     res = client.get(f"/embed/test-event/en?token={token}&headless=true", headers={"accept": "text/html"})
     assert res.status_code == 200
@@ -1768,7 +1768,7 @@ def test_embed_postmessage_target_origin_single(monkeypatch):
     from portal.config import settings
     monkeypatch.setattr(settings, "embed_allowed_origins", "https://eventyay.com")
     _seed_embed_event("test-event", "en")
-    
+
     token = _embed_listener_token(event_slug="test-event")
     res = client.get(f"/embed/test-event/en?token={token}", headers={"accept": "text/html"})
     assert "\"target_origin\": \"https://eventyay.com\"" in res.text
@@ -1780,7 +1780,7 @@ def test_embed_postmessage_target_origin_multi(monkeypatch):
     from portal.config import settings
     monkeypatch.setattr(settings, "embed_allowed_origins", "https://a.com, https://b.com")
     _seed_embed_event("test-event", "en")
-    
+
     token = _embed_listener_token(event_slug="test-event")
     res = client.get(f"/embed/test-event/en?token={token}", headers={"accept": "text/html"})
     assert "\"target_origin\": \"*\"" in res.text
@@ -1792,7 +1792,7 @@ def test_embed_postmessage_target_origin_empty(monkeypatch):
     from portal.config import settings
     monkeypatch.setattr(settings, "embed_allowed_origins", "")
     _seed_embed_event("test-event", "en")
-    
+
     token = _embed_listener_token(event_slug="test-event")
     res = client.get(f"/embed/test-event/en?token={token}", headers={"accept": "text/html"})
     assert "\"target_origin\": \"*\"" in res.text

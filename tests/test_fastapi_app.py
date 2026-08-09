@@ -54,6 +54,38 @@ _ws_auth = _admin_user_cookie
 
 # ── REST & page tests ─────────────────────────────────────────────────────────
 
+def test_token_redactor_handles_combined_request_line():
+    import logging
+    from fastapi_app import _UvicornTokenRedactor
+    
+    # Combined string shape (e.g. httptools protocol)
+    record = logging.LogRecord(
+        name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
+        msg='%s - "%s"',
+        args=("127.0.0.1:1234", "GET /embed/test-event/en?token=secretjwt123 HTTP/1.1"),
+        exc_info=None,
+    )
+    _UvicornTokenRedactor().filter(record)
+    output = record.getMessage()
+    assert "secretjwt123" not in output
+    assert "[REDACTED]" in output
+
+def test_token_redactor_handles_split_args():
+    import logging
+    from fastapi_app import _UvicornTokenRedactor
+    
+    # Split string shape (e.g. h11 protocol)
+    record = logging.LogRecord(
+        name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:1234", "GET", "/embed/test-event/en?token=secretjwt123", "1.1", 200),
+        exc_info=None,
+    )
+    _UvicornTokenRedactor().filter(record)
+    output = record.getMessage()
+    assert "secretjwt123" not in output
+    assert "[REDACTED]" in output
+
 
 def test_healthz_ok():
     res = client.get("/healthz")

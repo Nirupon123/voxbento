@@ -57,23 +57,27 @@ async def lifespan(app: FastAPI):
     dg.track_task(asyncio.create_task(_gen()))
 
     import logging
-    class _UvicornTokenRedactor(logging.Filter):
-        def filter(self, record):
-            if hasattr(record, "args") and len(record.args) >= 3:
-                new_args = []
-                for arg in record.args:
-                    if isinstance(arg, str) and "token=" in arg and (arg.startswith("/embed/") or arg.startswith("/ws/")):
-                        import re as _re
-                        arg = _re.sub(r"(?i)((?:^|&|\?)token=)[^& ]*", r"\1[REDACTED]", arg)
-                    new_args.append(arg)
-                record.args = tuple(new_args)
-            return True
-
     logging.getLogger("uvicorn.access").addFilter(_UvicornTokenRedactor())
-
     yield
     if pg.shared_http_client:
         await pg.shared_http_client.aclose()
+
+
+import logging
+class _UvicornTokenRedactor(logging.Filter):
+    import re as _re
+    _TOKEN_RE = _re.compile(r"(?i)((?:^|&|\?)token=)[^&\s]*")
+
+    def filter(self, record):
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+
+        if "token=" in message and ("/embed/" in message or "/ws/" in message):
+            record.msg = self._TOKEN_RE.sub(r"\1[REDACTED]", message)
+            record.args = ()
+        return True
 
 
 app = FastAPI(title="Voxbento", version="1.0.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)

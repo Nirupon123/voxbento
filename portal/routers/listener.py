@@ -201,6 +201,7 @@ async def embed_listener(
     captions: bool = Query(False),
     custom_css_url: str | None = Query(None, alias="customCssUrl"),
     headless: bool = Query(False),
+    target_lang: str | None = Query(None, alias="targetLang"),
 ):
     """Serve a standalone, iframe-safe listener embed.
 
@@ -303,7 +304,7 @@ async def embed_listener(
         "font_family": safe_font.capitalize(),
         "captions_enabled": captions,
         "custom_css_url": safe_custom_css,
-        "target_lang_code": language_code.lower(),
+        "target_lang_code": target_lang.lower() if target_lang else language_code.lower(),
         "js_version": _JS_CACHE_BUST,
         "headless": headless,
         "postmessage_target_origin": postmessage_target_origin,

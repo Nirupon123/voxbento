@@ -95,7 +95,7 @@
 
       var historyEl = document.getElementById('embed-caption-history');
       var currentEl = document.getElementById('embed-caption-current');
-      var maxHistory = 50;
+      var maxHistoryDOM = 50;
       
       var captionHistoryHeadless = [];
       var maxHistoryHeadless = 2;
@@ -116,8 +116,8 @@
             var status = msg.type === 'translation' ? 'final' : (msg.status || 'final');
             var text = (msg.text || '').trim();
 
-
             if (config.headless) {
+              // Headless: maintain a short array buffer and send concatenated string
               if (status === 'clear') {
                 captionHistoryHeadless = [];
                 text = '';
@@ -144,6 +144,7 @@
                 }
               }, config.target_origin);
             } else {
+              // Visible UI: build a DOM history like Voxbento's main listener UI
               if (status === 'clear') {
                 currentEl.textContent = '';
               } else if (status === 'final') {
@@ -151,7 +152,7 @@
                   var p = document.createElement('div');
                   p.textContent = text;
                   historyEl.appendChild(p);
-                  while (historyEl.children.length > maxHistory) {
+                  while (historyEl.children.length > maxHistoryDOM) {
                     historyEl.removeChild(historyEl.firstChild);
                   }
                 }

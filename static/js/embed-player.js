@@ -7,6 +7,7 @@
       console.error('Embed configuration not found.');
       return;
     }
+    console.log("Embed Player v2 Initialized");
     
     let config;
     try {
@@ -82,6 +83,10 @@
       var wsUrl = wsProto + '//' + window.location.host + urlPath + '?token=' + encodeURIComponent(EMBED_TOKEN);
       var captionWs = new WebSocket(wsUrl);
 
+      var historyEl = document.getElementById('embed-caption-history');
+      var currentEl = document.getElementById('embed-caption-current');
+      var maxHistory = 50;
+
       captionWs.onmessage = function(ev) {
         try {
           var msg = JSON.parse(ev.data);
@@ -92,10 +97,34 @@
           } else if (msg.type === 'translation' && msg.language_code === TARGET_LANG) {
               isValid = true;
           }
+          
+          if (isValid) {
+            console.log("Caption WS MSG:", msg);
+            var status = msg.type === 'translation' ? 'final' : (msg.status || 'final');
+            var text = (msg.text || '').trim();
 
-          if (isValid && msg.text) {
-            captionsEl.textContent = msg.text;
-            captionsEl.classList.remove('empty');
+            if (status === 'clear') {
+              currentEl.textContent = '';
+            } else if (status === 'final') {
+              if (text) {
+                var p = document.createElement('div');
+                p.textContent = text;
+                historyEl.appendChild(p);
+                while (historyEl.children.length > maxHistory) {
+                  historyEl.removeChild(historyEl.firstChild);
+                }
+              }
+              currentEl.textContent = '';
+            } else if (status === 'partial') {
+              currentEl.textContent = text;
+            }
+
+            if (historyEl.children.length === 0 && !currentEl.textContent) {
+              captionsEl.classList.add('empty');
+            } else {
+              captionsEl.classList.remove('empty');
+            }
+            captionsEl.scrollTop = captionsEl.scrollHeight;
           }
         } catch (_) {}
       };

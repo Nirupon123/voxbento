@@ -21,3 +21,5 @@ def get_http_client() -> httpx.AsyncClient:
     if shared_http_client is None or getattr(shared_http_client, "is_closed", False):
         shared_http_client = httpx.AsyncClient(timeout=10.0)
     return shared_http_client
+
+# force reload

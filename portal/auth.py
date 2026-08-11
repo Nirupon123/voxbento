@@ -408,13 +408,13 @@ async def resolve_ws_auth(websocket: WebSocket, booth_id: str) -> dict:
 
         token_lang = payload.get("language_code", "")
         if token_event and token_lang:
-            from portal.booth_identity import make_booth_id
+            from portal.booth_identity import parse_booth_id
             try:
-                expected_booth_id = make_booth_id(token_event, token_lang)
+                actual_event, _, actual_lang = parse_booth_id(booth_id)
             except ValueError:
                 await websocket.close(code=4003)
-                raise WSAuthError("Invalid event or language in token.")
-            if expected_booth_id != booth_id:
+                raise WSAuthError("Invalid booth_id format.")
+            if token_event != actual_event or token_lang != actual_lang:
                 await websocket.close(code=4003)
                 raise WSAuthError("Participant token scope does not match booth_id.")
             return payload
@@ -457,13 +457,13 @@ async def resolve_ws_auth(websocket: WebSocket, booth_id: str) -> dict:
 
     token_lang = payload.get("language_code", "")
     if token_event and token_lang:
-        from portal.booth_identity import make_booth_id
+        from portal.booth_identity import parse_booth_id
         try:
-            expected_booth_id = make_booth_id(token_event, token_lang)
+            actual_event, _, actual_lang = parse_booth_id(booth_id)
         except ValueError:
             await websocket.close(code=4003)
-            raise WSAuthError("Invalid event or language in cookie.")
-        if expected_booth_id != booth_id:
+            raise WSAuthError("Invalid booth_id format.")
+        if token_event != actual_event or token_lang != actual_lang:
             await websocket.close(code=4003)
             raise WSAuthError("Participant cookie scope does not match booth_id.")
 

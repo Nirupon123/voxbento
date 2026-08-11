@@ -18,14 +18,16 @@ class SubprocessManager:
         self.room_states: Dict[str, str] = {}
         self.lock = threading.Lock()
 
-    def start_room(self, event_slug: str, jitsi_url: str, mediamtx_rtsp_base: str):
+    def start_room(self, event_slug: str, room_id: int, jitsi_url: str, mediamtx_rtsp_base: str):
+        process_key = f"{event_slug}-{room_id}"
         with self.lock:
-            if event_slug in self.rooms:
-                self.stop_room_locked(event_slug)
+            if process_key in self.rooms:
+                self.stop_room_locked(process_key)
 
-            logger.info(f"Starting subprocess for event: {event_slug}")
+            logger.info(f"Starting subprocess for event: {event_slug}, room: {room_id}")
             env = os.environ.copy()
             env["BOT_EVENT_SLUG"] = event_slug
+            env["BOT_ROOM_ID"] = str(room_id)
             env["BOT_JITSI_URL"] = jitsi_url
             env["BOT_MEDIAMTX_RTSP_BASE"] = mediamtx_rtsp_base
 
@@ -53,19 +55,20 @@ async def run_capture():
     loop.add_signal_handler(signal.SIGINT, signal_handler)
 
     event_slug = os.environ.get("BOT_EVENT_SLUG")
+    room_id = os.environ.get("BOT_ROOM_ID")
     jitsi_url = os.environ.get("BOT_JITSI_URL")
     mediamtx_rtsp_base = os.environ.get("BOT_MEDIAMTX_RTSP_BASE")
 
     print("BOT_STAGE:launching", flush=True)
 
-    pulse_socket = f"/tmp/pulse-{event_slug}.sock"
-    pulse_dir = f"/tmp/pulse-dir-{event_slug}"
+    pulse_socket = f"/tmp/pulse-{event_slug}-{room_id}.sock"
+    pulse_dir = f"/tmp/pulse-dir-{event_slug}-{room_id}"
 
     os.makedirs(pulse_dir, exist_ok=True)
-    sink_name = f"sink_{event_slug}"
+    sink_name = f"sink_{event_slug}_{room_id}"
 
-    subprocess.run(["pkill", "-f", f"ffmpeg.*{event_slug}"], stderr=subprocess.DEVNULL)
-    subprocess.run(["pkill", "-f", f"pulseaudio.*{event_slug}"], stderr=subprocess.DEVNULL)
+    subprocess.run(["pkill", "-f", f"ffmpeg.*{event_slug}.*{room_id}"], stderr=subprocess.DEVNULL)
+    subprocess.run(["pkill", "-f", f"pulseaudio.*{event_slug}.*{room_id}"], stderr=subprocess.DEVNULL)
     if os.path.exists(pulse_socket):
         try:
             os.remove(pulse_socket)
@@ -170,7 +173,7 @@ async def run_capture():
                 "-application", "lowdelay",
                 "-f", "rtsp",
                 "-rtsp_transport", "tcp",
-                f"{mediamtx_rtsp_base}/{event_slug}/floor",
+                f"{mediamtx_rtsp_base}/{event_slug}/{room_id}/floor",
                 env=env,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
@@ -247,36 +250,36 @@ asyncio.run(run_capture())
                     text = line.strip()
                     logger.info(f"{prefix}: {text}")
                     if "BOT_STAGE:" in text:
-                        self.room_states[event_slug] = text.split("BOT_STAGE:", 1)[1].strip()
+                        self.room_states[process_key] = text.split("BOT_STAGE:", 1)[1].strip()
 
-            threading.Thread(target=log_stream, args=(proc.stdout, f"bot[{event_slug}] stdout"), daemon=True).start()
-            threading.Thread(target=log_stream, args=(proc.stderr, f"bot[{event_slug}] stderr"), daemon=True).start()
+            threading.Thread(target=log_stream, args=(proc.stdout, f"bot[{process_key}] stdout"), daemon=True).start()
+            threading.Thread(target=log_stream, args=(proc.stderr, f"bot[{process_key}] stderr"), daemon=True).start()
 
-            self.room_states[event_slug] = "launching"
-            self.rooms[event_slug] = proc
+            self.room_states[process_key] = "launching"
+            self.rooms[process_key] = proc
 
-    def stop_room_locked(self, event_slug: str):
-        if event_slug in self.rooms:
-            logger.info(f"Terminating subprocess for {event_slug}")
-            self.room_states[event_slug] = "stopping"
-            proc = self.rooms[event_slug]
+    def stop_room_locked(self, process_key: str):
+        if process_key in self.rooms:
+            logger.info(f"Terminating subprocess for {process_key}")
+            self.room_states[process_key] = "stopping"
+            proc = self.rooms[process_key]
             if proc.poll() is None:
                 proc.terminate()
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    logger.warning(f"Graceful stop timed out for {event_slug}; sending SIGKILL")
+                    logger.warning(f"Graceful stop timed out for {process_key}; sending SIGKILL")
                     proc.kill()
                     try:
                         proc.wait(timeout=3)
                     except subprocess.TimeoutExpired:
-                        logger.error(f"Subprocess for {event_slug} did not exit after SIGKILL")
-            del self.rooms[event_slug]
-            self.room_states[event_slug] = "stopped"
+                        logger.error(f"Subprocess for {process_key} did not exit after SIGKILL")
+            del self.rooms[process_key]
+            self.room_states[process_key] = "stopped"
 
-    def stop_room(self, event_slug: str):
+    def stop_room(self, process_key: str):
         with self.lock:
-            self.stop_room_locked(event_slug)
+            self.stop_room_locked(process_key)
 
 
 manager = SubprocessManager()
@@ -295,23 +298,25 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if self.path == "/start":
             event_slug = req.get("event_slug")
+            room_id = req.get("room_id")
             jitsi_url = req.get("jitsi_url")
             mediamtx_rtsp_base = req.get("mediamtx_rtsp_base")
-            if not all([event_slug, jitsi_url, mediamtx_rtsp_base]):
+            if not all([event_slug, room_id is not None, jitsi_url, mediamtx_rtsp_base]):
                 self.send_error(400, "Missing parameters")
                 return
-            manager.start_room(event_slug, jitsi_url, mediamtx_rtsp_base)
+            manager.start_room(event_slug, room_id, jitsi_url, mediamtx_rtsp_base)
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "started", "event_slug": event_slug}).encode())
+            self.wfile.write(json.dumps({"status": "started", "process_key": f"{event_slug}-{room_id}"}).encode())
 
         elif self.path == "/stop":
             event_slug = req.get("event_slug")
-            if not event_slug:
-                self.send_error(400, "Missing event_slug")
+            room_id = req.get("room_id")
+            if not event_slug or room_id is None:
+                self.send_error(400, "Missing event_slug or room_id")
                 return
-            manager.stop_room(event_slug)
+            manager.stop_room(f"{event_slug}-{room_id}")
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
@@ -323,12 +328,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         if self.path == "/status":
             status = {}
             with manager.lock:
-                for event_slug, proc in manager.rooms.items():
-                    stage = manager.room_states.get(event_slug, "unknown")
+                for process_key, proc in manager.rooms.items():
+                    stage = manager.room_states.get(process_key, "unknown")
                     if proc.poll() is not None:
-                        status[event_slug] = {"state": "dead", "stage": "dead", "exit_code": proc.returncode}
+                        status[process_key] = {"state": "dead", "stage": "dead", "exit_code": proc.returncode}
                     else:
-                        status[event_slug] = {"state": "healthy", "stage": stage, "pid": proc.pid}
+                        status[process_key] = {"state": "healthy", "stage": stage, "pid": proc.pid}
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
@@ -346,6 +351,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
     finally:
-        for slug in list(manager.rooms.keys()):
-            manager.stop_room(slug)
+        for p_key in list(manager.rooms.keys()):
+            manager.stop_room(p_key)
         httpd.server_close()

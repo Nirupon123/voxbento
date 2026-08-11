@@ -163,11 +163,11 @@ class DBBooth(Base):
     """
 
     __tablename__ = "booths"
-    __table_args__ = (Index("ix_booths_event_language", "event_id", "language_code", unique=True),)
+    __table_args__ = (Index("ix_booths_room_language", "room_id", "language_code", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
-    room_id: Mapped[int | None] = mapped_column(ForeignKey("rooms.id", ondelete="CASCADE"), nullable=True)
+    room_id: Mapped[int] = mapped_column(ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False)
     language_code: Mapped[str] = mapped_column(String(2))
     language_name: Mapped[str] = mapped_column(String(100))
     transcription_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
@@ -222,7 +222,7 @@ class DBBooth(Base):
         Requires that ``self.event`` is loaded (use ``select_related`` /
         ``joinedload``).
         """
-        return make_mediamtx_path(self.event.slug, self.language_code)
+        return make_mediamtx_path(self.event.slug, self.room_id, self.language_code)
 
     def __repr__(self) -> str:
         return f"<DBBooth id={self.id} lang={self.language_code!r}>"

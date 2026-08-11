@@ -28,8 +28,9 @@ _EVENT_SLUG_MAX_LENGTH = 64
 _LANGUAGE_CODE_RE = re.compile(r"^[a-z]{2}$")
 
 # Full booth ID: {event_slug}-{language_code}
-# The language code is always the last two-letter segment after the final hyphen.
-_BOOTH_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*-[a-z]{2}$")
+# _EVENT_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_LANGUAGE_CODE_RE = re.compile(r"^[a-z]{2}$")
+_BOOTH_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+-(?:[a-z]{2}|floor)$")
 
 # ISO 639-1 codes (subset of most common; validated against this set).
 ISO_639_1_CODES: frozenset[str] = frozenset(
@@ -249,14 +250,16 @@ def validate_event_slug(slug: str) -> str:
 
 
 def validate_language_code(code: str) -> str:
-    """Validate an ISO 639-1 language code.
+    """Validate an ISO 639-1 language code or 'floor'.
 
     Returns the lowercased code on success.
     Raises ``ValueError`` with a descriptive message on failure.
     """
     normalised = code.strip().lower()
+    if normalised == "floor":
+        return normalised
     if not _LANGUAGE_CODE_RE.match(normalised):
-        raise ValueError(f"Language code must be exactly two lowercase ASCII letters (ISO 639-1). Got: '{code}'.")
+        raise ValueError(f"Language code must be exactly two lowercase ASCII letters (ISO 639-1) or 'floor'. Got: '{code}'.")
     if normalised not in ISO_639_1_CODES:
         raise ValueError(f"'{normalised}' is not a recognised ISO 639-1 language code.")
     return normalised
@@ -277,73 +280,77 @@ def validate_instance(instance: str) -> BoothInstance:
 # ── Identity construction / conversion ────────────────────────────────────────
 
 
-def make_booth_id(event_slug: str, language_code: str) -> str:
+def make_booth_id(event_slug: str, room_id: int, language_code: str) -> str:
     """Build a booth ID from validated coordinates.
 
-    Format: ``{event_slug}-{language_code}`` (e.g. ``pycon2026-en``).
+    Format: ``{event_slug}-{room_id}-{language_code}`` (e.g. ``pycon2026-14-en``).
     Inputs are validated before construction.
     """
     slug = validate_event_slug(event_slug)
     code = validate_language_code(language_code)
-    return f"{slug}-{code}"
+    return f"{slug}-{room_id}-{code}"
 
 
-def make_mediamtx_path(event_slug: str, language_code: str) -> str:
+def make_mediamtx_path(event_slug: str, room_id: int, language_code: str) -> str:
     """Build a MediaMTX stream path from validated coordinates.
 
-    Format: ``{event_slug}/{language_code}`` (e.g. ``pycon2026/en``).
+    Format: ``{event_slug}/{room_id}/{language_code}`` (e.g. ``pycon2026/14/en``).
     """
     slug = validate_event_slug(event_slug)
     code = validate_language_code(language_code)
-    return f"{slug}/{code}"
+    return f"{slug}/{room_id}/{code}"
 
 
 def booth_id_to_mediamtx_path(booth_id: str) -> str:
     """Convert a booth ID to its corresponding MediaMTX path.
 
-    ``pycon2026-en`` → ``pycon2026/en``
+    ``pycon2026-14-en`` → ``pycon2026/14/en``
 
     Raises ``ValueError`` if the booth ID is malformed.
     """
-    event_slug, language_code = parse_booth_id(booth_id)
-    return f"{event_slug}/{language_code}"
+    event_slug, room_id, language_code = parse_booth_id(booth_id)
+    return f"{event_slug}/{room_id}/{language_code}"
 
 
 def mediamtx_path_to_booth_id(path: str) -> str:
     """Convert a MediaMTX path to the corresponding booth ID.
 
-    ``pycon2026/en`` → ``pycon2026-en``
+    ``pycon2026/14/en`` → ``pycon2026-14-en``
 
     Raises ``ValueError`` if the path is malformed.
     """
     normalised = path.strip().strip("/")
     parts = normalised.split("/")
-    if len(parts) != 2:
-        raise ValueError(f"MediaMTX path must have exactly two segments (event_slug/language_code). Got: '{path}'.")
+    if len(parts) != 3:
+        raise ValueError(f"MediaMTX path must have exactly three segments (event_slug/room_id/language_code). Got: '{path}'.")
     event_slug = validate_event_slug(parts[0])
-    language_code = validate_language_code(parts[1])
-    return f"{event_slug}-{language_code}"
+    room_id = int(parts[1])
+    language_code = validate_language_code(parts[2])
+    return f"{event_slug}-{room_id}-{language_code}"
 
 
-def parse_booth_id(booth_id: str) -> tuple[str, str]:
-    """Split a booth ID into (event_slug, language_code).
-
-    The language code is always the last two characters after the final
-    hyphen. Everything before that hyphen is the event slug.
+def parse_booth_id(booth_id: str) -> tuple[str, int, str]:
+    """Split a booth ID into (event_slug, room_id, language_code).
 
     Raises ``ValueError`` if the booth ID format is invalid.
     """
     normalised = booth_id.strip().lower()
     if not _BOOTH_ID_RE.match(normalised):
         raise ValueError(
-            f"Booth ID must follow the format '{{event_slug}}-{{language_code}}' "
-            f"where language_code is a two-letter ISO 639-1 code. Got: '{booth_id}'."
+            f"Booth ID must follow the format '{{event_slug}}-{{room_id}}-{{language_code}}'. Got: '{booth_id}'."
         )
-    # Last hyphen separates slug from language code
-    last_hyphen = normalised.rfind("-")
-    event_slug = normalised[:last_hyphen]
-    language_code = normalised[last_hyphen + 1 :]
-    # Validate both halves
+    # booth_id is event_slug-room_id-language_code
+    # event_slug can contain hyphens, room_id and language_code cannot.
+    # So the last hyphen separates room_id and language_code, 
+    # and the second to last hyphen separates event_slug and room_id.
+    parts = normalised.rsplit("-", 2)
+    if len(parts) != 3:
+        raise ValueError(f"Invalid booth ID format: '{booth_id}'.")
+    
+    event_slug = parts[0]
+    room_id = int(parts[1])
+    language_code = parts[2]
+    
     validate_event_slug(event_slug)
     validate_language_code(language_code)
-    return event_slug, language_code
+    return event_slug, room_id, language_code

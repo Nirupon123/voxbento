@@ -183,7 +183,7 @@ async def mission_control_grid(request: Request, event_slug: str, user=Depends(r
         for db_b in db_booths:
             if allowed_room_ids is not None and db_b.room_id not in allowed_room_ids:
                 continue
-            booth_id = make_booth_id(event.slug, db_b.language_code)
+            booth_id = make_booth_id(event.slug, db_b.room_id, db_b.language_code)
             in_mem = booths._booths.get(booth_id)
             if in_mem is not None:
                 state = in_mem.as_public_dict()
@@ -280,7 +280,7 @@ async def admin_dashboard(request: Request, page: int = 1):
             db_booths = booths_by_event.get(ev.id, [])
             booth_statuses = []
             for b in db_booths:
-                booth_id = make_booth_id(ev.slug, b.language_code)
+                booth_id = make_booth_id(ev.slug, b.room_id, b.language_code)
                 mem_booth = booths.get_booth_sync(booth_id)
                 is_live = mem_booth is not None and mem_booth.ingest_status == "connected"
                 booth_statuses.append({"db": b, "booth_id": booth_id, "is_live": is_live})
@@ -537,7 +537,7 @@ async def admin_event_detail(request: Request, event_id: int):
         db_booths = await list_booths_for_event(session, event_id)
     booth_statuses = []
     for b in db_booths:
-        bid = make_booth_id(event.slug, b.language_code)
+        bid = make_booth_id(event.slug, b.room_id, b.language_code)
         mem_booth = booths.get_booth_sync(bid)
         is_live = mem_booth is not None and mem_booth.ingest_status == "connected"
         booth_statuses.append({"db": b, "booth_id": bid, "is_live": is_live})
@@ -687,7 +687,7 @@ async def admin_room_detail(request: Request, event_id: int, room_id: int):
         db_booths = await list_booths_for_room(session, room_id)
     booth_statuses = []
     for b in db_booths:
-        bid = make_booth_id(event.slug, b.language_code)
+        bid = make_booth_id(event.slug, b.room_id, b.language_code)
         mem_booth = booths.get_booth_sync(bid)
         is_live = mem_booth is not None and mem_booth.ingest_status == "connected"
         booth_statuses.append({"db": b, "booth_id": bid, "is_live": is_live})
@@ -914,6 +914,7 @@ async def api_start_floor_transcription(room_id: int):
             f"{settings.floor_bot_base}/start",
             json={
                 "event_slug": event_slug,
+                "room_id": room_id,
                 "jitsi_url": jitsi_url,
                 "mediamtx_rtsp_base": settings.mediamtx_rtsp_base,
             },
@@ -929,7 +930,7 @@ async def api_start_floor_transcription(room_id: int):
         await start_transcription_worker(
             event_slug=event_slug,
             language_code="floor",
-            booth_id=f"{event_slug}-floor",
+            booth_id=make_booth_id(event_slug, room_id, "floor"),
             broadcast_callback=broadcast_transcription,
             provider=room.floor_transcription_provider,
             model_size=room.floor_transcription_model,
@@ -940,7 +941,7 @@ async def api_start_floor_transcription(room_id: int):
     except Exception as e:
         logger.error(f"Failed to start transcription worker: {e}")
         client = get_http_client()
-        await client.post(f"{settings.floor_bot_base}/stop", json={"event_slug": event_slug})
+        await client.post(f"{settings.floor_bot_base}/stop", json={"event_slug": event_slug, "room_id": room_id})
         raise HTTPException(status_code=500, detail=f"Failed to start transcription worker: {e}")
     return {"status": "started"}
 
@@ -957,10 +958,10 @@ async def api_stop_floor_transcription(room_id: int):
         event_slug = event.slug
     try:
         client = get_http_client()
-        await client.post(f"{settings.floor_bot_base}/stop", json={"event_slug": event_slug}, timeout=15.0)
+        await client.post(f"{settings.floor_bot_base}/stop", json={"event_slug": event_slug, "room_id": room_id}, timeout=15.0)
     except Exception as e:
         logger.error(f"Failed to stop floor-bot: {e}")
-    await stop_transcription_worker(f"{event_slug}-floor")
+    await stop_transcription_worker(make_booth_id(event_slug, room_id, "floor"))
     return {"status": "stopped"}
 
 
@@ -982,7 +983,8 @@ async def api_floor_transcription_status(room_id: int):
         resp = await client.get(f"{settings.floor_bot_base}/status", timeout=5.0)
         resp.raise_for_status()
         data = resp.json()
-        info = (data.get("active_rooms") or {}).get(event_slug)
+        process_key = f"{event_slug}-{room_id}"
+        info = (data.get("active_rooms") or {}).get(process_key)
         if info:
             stage = info.get("stage", info.get("state", "unknown"))
             running = info.get("state") == "healthy"
@@ -1012,7 +1014,7 @@ async def admin_booth_list(request: Request, event_id: int, room_id: int):
         db_booths = await list_booths_for_room(session, room_id)
     booth_statuses = []
     for b in db_booths:
-        bid = make_booth_id(event.slug, b.language_code)
+        bid = make_booth_id(event.slug, b.room_id, b.language_code)
         mem_booth = booths.get_booth_sync(bid)
         is_live = mem_booth is not None and mem_booth.ingest_status == "connected"
         booth_statuses.append({"db": b, "booth_id": bid, "is_live": is_live})
@@ -1058,8 +1060,8 @@ async def admin_booth_detail(request: Request, event_id: int, room_id: int, boot
         users = await list_users(session)
         memberships = await list_memberships_for_booth(session, booth_id)
     membership_map = {m.user_id: m for m in memberships}
-    bid = make_booth_id(event.slug, db_booth.language_code)
-    mediamtx_path = make_mediamtx_path(event.slug, db_booth.language_code)
+    bid = make_booth_id(event.slug, db_booth.room_id, db_booth.language_code)
+    mediamtx_path = make_mediamtx_path(event.slug, db_booth.room_id, db_booth.language_code)
     whep_url = f"{settings.mediamtx_whip_base}/{mediamtx_path}/whep"
     mem_booth = booths.get_booth_sync(bid)
     is_live = mem_booth is not None and mem_booth.ingest_status == "connected"
@@ -1363,7 +1365,7 @@ async def admin_transcription_settings(
         db_booth.transcription_provider = transcription_provider
         db_booth.transcription_model = transcription_model
         await session.commit()
-        bid = make_booth_id(event.slug, db_booth.language_code)
+        bid = make_booth_id(event.slug, db_booth.room_id, db_booth.language_code)
         state = booths.get_booth_sync(bid)
         is_live = state is not None and state.active_interpreter_id is not None
         if is_live:

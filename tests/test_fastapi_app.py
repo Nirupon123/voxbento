@@ -107,21 +107,21 @@ def test_home_renders_home_page():
 
 def test_interpreter_booth_requires_auth():
     """Unauthenticated /interpreter/ requests redirect to login."""
-    res = client.get("/interpreter/myevent/en", follow_redirects=False)
+    res = client.get("/interpreter/myevent/1/en", follow_redirects=False)
     assert res.status_code == 303
     assert "/login" in res.headers["location"]
 
 
 def test_interpreter_booth_page_renders():
-    res = client.get("/interpreter/myevent/en", cookies=_interpreter_cookie("myevent", "en"))
+    res = client.get("/interpreter/myevent/1/en", cookies=_interpreter_cookie("myevent", "en"))
     assert res.status_code == 200, res.text
-    assert b"myevent-en" in res.content
+    assert b"myevent-1-en" in res.content
 
 
 def test_interpreter_booth_jitsi_url_uses_base_url():
     """Jitsi URL in the booth page must use the configured base URL, not
     a hard-coded http:// scheme, to avoid mixed-content on HTTPS deployments."""
-    res = client.get("/interpreter/myevent/en", cookies=_interpreter_cookie("myevent", "en"))
+    res = client.get("/interpreter/myevent/1/en", cookies=_interpreter_cookie("myevent", "en"))
     assert res.status_code == 200, res.text
     from portal.config import settings
     from portal.utils import _make_jitsi_url
@@ -156,7 +156,7 @@ def test_interpreter_booth_jitsi_domain_matches_base_url_host():
 
     from portal.config import settings
 
-    res = client.get("/interpreter/myevent/en", cookies=_interpreter_cookie("myevent", "en"))
+    res = client.get("/interpreter/myevent/1/en", cookies=_interpreter_cookie("myevent", "en"))
     assert res.status_code == 200, res.text
     expected_host = urlparse(settings.effective_jitsi_base_url).netloc
     assert f"data-jitsi-domain='{expected_host}'".encode() in res.content
@@ -782,7 +782,7 @@ def _ws_join(ws, display_name: str, role: str, language: str, channel_id: str) -
 
 def test_ws_broadcast_unlock_authorized_user_can_toggle():
     """Authorized coordinator/admin session can toggle broadcast lock."""
-    client.post("/api/events/broadcastok/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/broadcastok/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     booth = "broadcastok-en"
     channel = "broadcastok/en"
 
@@ -798,7 +798,7 @@ def test_ws_broadcast_unlock_authorized_user_can_toggle():
 
 def test_ws_broadcast_unlock_interpreter_rejected():
     """Interpreter session cannot toggle broadcast lock."""
-    client.post("/api/events/broadcastdeny/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/broadcastdeny/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     booth = "broadcastdeny-en"
     channel = "broadcastdeny/en"
 
@@ -973,9 +973,9 @@ def test_ws_cancel_handoff_initiator_resets_state_to_idle():
 
 def test_whip_url_active_interpreter_gets_url():
     """Active interpreter receives a WHIP URL from the gated endpoint."""
-    client.post("/api/events/whip-gate/booths", json={"language_code": "en", "language": "English"})
-    booth = "whip-gate-en"
-    channel = "whip-gate/en"
+    client.post("/api/events/whip-gate/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
+    booth = "whip-gate-1-en"
+    channel = "whip-gate/1/en"
     with client.websocket_connect(f"/ws/booth/{booth}", cookies=_ws_auth()) as ws:
         ws.send_text(
             json.dumps(
@@ -1009,7 +1009,7 @@ def test_whip_url_active_interpreter_gets_url():
 
 def test_whip_url_standby_interpreter_rejected():
     """Standby interpreter receives 403 from the WHIP URL endpoint."""
-    client.post("/api/events/whip-standby/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/whip-standby/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     booth = "whip-standby-en"
     channel = "whip-standby/en"
     with (
@@ -1062,7 +1062,7 @@ def test_whip_url_standby_interpreter_rejected():
 
 def test_whip_url_active_coordinator_passes():
     """Active coordinator role receives 200 from the WHIP URL endpoint."""
-    client.post("/api/events/whip-coord/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/whip-coord/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     booth = "whip-coord-en"
     channel = "whip-coord/en"
     with client.websocket_connect(f"/ws/booth/{booth}", cookies=_ws_auth()) as ws:
@@ -1096,7 +1096,7 @@ def test_whip_url_active_coordinator_passes():
 
 def test_whip_url_unknown_participant_returns_404():
     """Unknown participant_id returns 404."""
-    client.post("/api/events/whip-404/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/whip-404/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     res = client.get(
         "/api/events/whip-404/booths/en/whip-url",
         params={"participant_id": "nonexistent"},
@@ -1106,7 +1106,7 @@ def test_whip_url_unknown_participant_returns_404():
 
 def test_whip_url_missing_participant_id_returns_422():
     """Missing required participant_id query param returns 422."""
-    client.post("/api/events/whip-missing/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/whip-missing/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     res = client.get("/api/events/whip-missing/booths/en/whip-url")
     assert res.status_code == 422
 
@@ -1119,14 +1119,14 @@ def test_create_event_booth():
     res = client.post(
         "/api/events/pycon2026/booths",
         json={
-            "language_code": "en",
+            "language_code": "en", "room_id": 1,
             "language": "English",
             "room_id": 42,
         },
     )
     assert res.status_code == 201
     body = res.json()
-    assert body["booth_id"] == "pycon2026-en"
+    assert body["booth_id"] == "pycon2026-42-en"
     assert body["event_slug"] == "pycon2026"
     assert body["language_code"] == "en"
     assert body["mediamtx_path"] == "pycon2026/en"
@@ -1160,7 +1160,7 @@ def test_create_event_booth_invalid_event_slug():
     res = client.post(
         "/api/events/--bad--/booths",
         json={
-            "language_code": "en",
+            "language_code": "en", "room_id": 1,
             "language": "English",
         },
     )
@@ -1169,7 +1169,7 @@ def test_create_event_booth_invalid_event_slug():
 
 def test_list_event_booths():
     """GET /api/events/{slug}/booths lists booths for the event."""
-    client.post("/api/events/listtest/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/listtest/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     client.post("/api/events/listtest/booths", json={"language_code": "de", "language": "German"})
     client.post("/api/events/other/booths", json={"language_code": "ja", "language": "Japanese"})
 
@@ -1195,16 +1195,16 @@ def test_list_event_booths_empty():
 
 def test_interpreter_booth_by_identity_requires_auth():
     """Unauthenticated /interpreter/{slug}/{lang} redirects to login."""
-    res = client.get("/interpreter/myevent/en", follow_redirects=False)
+    res = client.get("/interpreter/myevent/1/en", follow_redirects=False)
     assert res.status_code == 303
     assert "/login" in res.headers["location"]
 
 
 def test_interpreter_booth_by_identity_page():
     """GET /interpreter/{event_slug}/{language_code} renders the booth page."""
-    res = client.get("/interpreter/myevent/en", cookies=_interpreter_cookie("myevent", "en"))
+    res = client.get("/interpreter/myevent/1/en", cookies=_interpreter_cookie("myevent", "en"))
     assert res.status_code == 200, res.text
-    assert b"myevent-en" in res.content
+    assert b"myevent-1-en" in res.content
     assert b"data-event-slug='myevent'" in res.content
     assert b"data-language-code='en'" in res.content
     assert b"data-whip-url=" in res.content
@@ -1213,7 +1213,7 @@ def test_interpreter_booth_by_identity_page():
 
 def test_interpreter_booth_by_identity_whip_whep_urls():
     """The identity-based booth page has correct WHIP and WHEP URLs."""
-    res = client.get("/interpreter/fossasia/fr", cookies=_interpreter_cookie("fossasia", "fr"))
+    res = client.get("/interpreter/fossasia/1/fr", cookies=_interpreter_cookie("fossasia", "fr"))
     assert res.status_code == 200, res.text
     content = res.content.decode()
     assert "fossasia/fr/whip" in content
@@ -1224,13 +1224,13 @@ def test_interpreter_booth_by_identity_no_role_returns_403():
     """Registered user without event membership gets 403 on the booth page."""
     # user_token without is_admin and no EventMembership in DB
     tok = create_user_token(user_id=999, email="norole@test.com", is_admin=False)
-    res = client.get("/interpreter/norole-event/en", cookies={"user_token": tok})
+    res = client.get("/interpreter/norole-event/1/en", cookies={"user_token": tok})
     assert res.status_code == 403
 
 
 def test_interpreter_booth_admin_user_gets_super_admin_role():
     """A user with is_admin=True gets super_admin role without needing a membership."""
-    res = client.get("/interpreter/myevent/en", cookies=_admin_user_cookie())
+    res = client.get("/interpreter/myevent/1/en", cookies=_admin_user_cookie())
     assert res.status_code == 200, res.text
     assert b"data-granted-role='super_admin'" in res.content
 
@@ -1249,12 +1249,12 @@ def test_full_bootstrap_flow():
     assert create_res.status_code == 201
     booth = create_res.json()
     booth_id = booth["booth_id"]
-    assert booth_id == "bootstrap-es"
+    assert booth_id == "bootstrap-5-es"
 
     # 2. Interpreter accesses booth page (with valid invite token)
     page_res = client.get("/interpreter/bootstrap/es", cookies=_interpreter_cookie("bootstrap", "es"))
     assert page_res.status_code == 200
-    assert b"bootstrap-es" in page_res.content
+    assert b"bootstrap-5-es" in page_res.content
 
     # 3. Interpreter joins via WebSocket
     channel = booth["mediamtx_path"]
@@ -1295,11 +1295,11 @@ def test_full_bootstrap_flow():
 
 def test_event_booth_state_returns_existing():
     """Event-scoped state endpoint returns 200 for an existing booth."""
-    client.post("/api/events/statetest/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/statetest/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     res = client.get("/api/events/statetest/booths/en/state")
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["booth_id"] == "statetest-en"
+    assert body["booth_id"] == "statetest-1-en"
     assert body["event_slug"] == "statetest"
     assert body["language_code"] == "en"
 
@@ -1327,7 +1327,7 @@ def test_event_booth_state_does_not_autocreate():
 
 def test_event_booth_whip_url_active_interpreter():
     """Event-scoped WHIP URL returns URL for active interpreter."""
-    client.post("/api/events/whipevent/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/whipevent/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     with client.websocket_connect("/ws/booth/whipevent-en", cookies=_ws_auth()) as ws:
         ws.send_text(
             json.dumps(
@@ -1358,7 +1358,7 @@ def test_event_booth_whip_url_active_interpreter():
 
 def test_event_booth_whip_url_standby_rejected():
     """Event-scoped WHIP URL rejects standby interpreter."""
-    client.post("/api/events/whiprej/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/whiprej/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     with client.websocket_connect("/ws/booth/whiprej-en", cookies=_ws_auth()) as ws:
         # First interpreter joins (becomes active)
         ws.send_text(
@@ -1403,7 +1403,7 @@ def test_event_booth_whip_url_standby_rejected():
 
 def test_cross_event_listing_isolation():
     """Booths created under event A must not appear in event B listing."""
-    client.post("/api/events/isolatea/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/isolatea/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     client.post("/api/events/isolatea/booths", json={"language_code": "fr", "language": "French"})
     client.post("/api/events/isolateb/booths", json={"language_code": "de", "language": "German"})
 
@@ -1418,7 +1418,7 @@ def test_cross_event_listing_isolation():
 
 def test_cross_event_state_isolation():
     """Event-scoped state endpoint must not leak booths across events."""
-    client.post("/api/events/eventx/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/eventx/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     # eventx-en exists, but asking eventy for 'en' must return 404
     res = client.get("/api/events/eventy/booths/en/state")
     assert res.status_code == 404
@@ -1426,17 +1426,17 @@ def test_cross_event_state_isolation():
 
 def test_cross_event_mediamtx_path_isolation():
     """Two events with the same language must get separate MediaMTX paths."""
-    r1 = client.post("/api/events/confa/booths", json={"language_code": "en", "language": "English"})
-    r2 = client.post("/api/events/confb/booths", json={"language_code": "en", "language": "English"})
+    r1 = client.post("/api/events/confa/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
+    r2 = client.post("/api/events/confb/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
 
-    assert r1.json()["mediamtx_path"] == "confa/en"
-    assert r2.json()["mediamtx_path"] == "confb/en"
+    assert r1.json()["mediamtx_path"] == "confa/1/en"
+    assert r2.json()["mediamtx_path"] == "confb/2/en"
     assert r1.json()["booth_id"] != r2.json()["booth_id"]
 
 
 def test_ws_cross_event_join_rejected():
     """WebSocket join with mismatched event_slug must be rejected."""
-    client.post("/api/events/evtreal/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/evtreal/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     with client.websocket_connect("/ws/booth/evtreal-en", cookies=_ws_auth()) as ws:
         ws.send_text(
             json.dumps(
@@ -1457,7 +1457,7 @@ def test_ws_cross_event_join_rejected():
 
 def test_ws_cross_event_join_accepted_with_correct_slug():
     """WebSocket join with matching event_slug must succeed."""
-    client.post("/api/events/evtok/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/evtok/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
     with client.websocket_connect("/ws/booth/evtok-en", cookies=_ws_auth()) as ws:
         ws.send_text(
             json.dumps(
@@ -1478,8 +1478,8 @@ def test_ws_cross_event_join_accepted_with_correct_slug():
 def test_full_isolation_flow():
     """End-to-end: two separate events share no state."""
     # Create booths for two events with the same language
-    client.post("/api/events/fest1/booths", json={"language_code": "en", "language": "English"})
-    client.post("/api/events/fest2/booths", json={"language_code": "en", "language": "English"})
+    client.post("/api/events/fest1/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
+    client.post("/api/events/fest2/booths", json={"language_code": "en", "room_id": 1, "language": "English"})
 
     # Join fest1 booth
     with client.websocket_connect("/ws/booth/fest1-en", cookies=_ws_auth()) as ws:
@@ -1828,5 +1828,5 @@ def test_embed_captions_opt_in_websocket_auth():
     assert payload.get("event_slug") == "test-event"
 
     # Verify the booth_id produced by make_booth_id satisfies the startswith check.
-    booth_id = "test-event-en"  # make_booth_id("test-event", "en")
+    booth_id = "test-event-1-en"  # make_booth_id("test-event", 1, 1,  "en")
     assert booth_id.startswith(f"{payload['event_slug']}-")

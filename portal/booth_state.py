@@ -70,9 +70,9 @@ class Booth:
     ingest_status: str = "disconnected"
 
     def __post_init__(self) -> None:
-        if self.event_slug and self.language_code:
+        if self.event_slug and self.language_code and self.room_id is not None:
             if not self.mediamtx_path:
-                self.mediamtx_path = make_mediamtx_path(self.event_slug, self.language_code)
+                self.mediamtx_path = make_mediamtx_path(self.event_slug, self.room_id, self.language_code)
             if not self.channel_id:
                 self.channel_id = self.mediamtx_path
 
@@ -137,7 +137,8 @@ class BoothRegistry:
         booth = self._booths.get(booth_id)
         if booth is None:
             try:
-                event_slug, language_code = parse_booth_id(booth_id)
+                event_slug, parsed_room_id, language_code = parse_booth_id(booth_id)
+                room_id = room_id if room_id is not None else parsed_room_id
             except ValueError:
                 event_slug = ""
                 language_code = ""
@@ -157,9 +158,9 @@ class BoothRegistry:
         event_slug: str,
         language_code: str,
         language: str,
+        room_id: int,
         channel_id: str = "",
         instance: BoothInstance = "primary",
-        room_id: int | None = None,
     ) -> dict:
         """Create a booth using validated identity coordinates.
 
@@ -178,8 +179,8 @@ class BoothRegistry:
         slug = validate_event_slug(event_slug)
         code = validate_language_code(language_code)
         inst = validate_instance(instance)
-        booth_id = make_booth_id(slug, code)
-        mtx_path = make_mediamtx_path(slug, code)
+        booth_id = make_booth_id(slug, room_id, code)
+        mtx_path = make_mediamtx_path(slug, room_id, code)
 
         async with self._lock:
             if booth_id in self._booths:
@@ -529,13 +530,21 @@ class BoothRegistry:
         """
         return self._booths.get(booth_id)
 
-    async def get_booth_for_event(self, event_slug: str, language_code: str) -> dict | None:
+    async def get_booth_for_event(self, event_slug: str, room_id: int, language_code: str) -> dict | None:
         """Return the booth for a specific event + language, or None.
 
         Unlike :meth:`snapshot`, this never auto-creates a booth.
         """
-        booth_id = make_booth_id(event_slug, language_code)
+        booth_id = make_booth_id(event_slug, room_id, language_code)
         return await self.get_booth(booth_id)
+
+    async def remove_booth(self, event_slug: str, room_id: int, language_code: str) -> None:
+        """Remove a booth state entirely.
+
+        Removes from MediaMTX (if path matches), terminates any associated
+        transcription worker, and removes the in-memory state.
+        """
+        booth_id = make_booth_id(event_slug, room_id, language_code)
 
     async def validate_booth_event(self, booth_id: str, expected_event: str) -> None:
         """Raise PermissionError if *booth_id* does not belong to *expected_event*.
@@ -543,7 +552,7 @@ class BoothRegistry:
         Used by event-scoped API endpoints to prevent cross-event access.
         """
         try:
-            event_slug, _ = parse_booth_id(booth_id)
+            event_slug, _, _ = parse_booth_id(booth_id)
         except ValueError:
             event_slug = ""
         if event_slug != expected_event:

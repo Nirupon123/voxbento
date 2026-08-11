@@ -48,7 +48,7 @@ async def home(request: Request):
                 bms = await list_booth_memberships_for_user(session, uid)
                 user_booth_roles = {bm.booth_id: bm.role for bm in bms}
                 for bm in bms:
-                    bid = make_booth_id(bm.booth.event.slug, bm.booth.language_code)
+                    bid = make_booth_id(bm.booth.event.slug, bm.booth.room_id, bm.booth.language_code)
                     mem_booth = booths.get_booth_sync(bid)
                     is_live = mem_booth is not None and mem_booth.ingest_status == "connected"
                     my_booths.append(
@@ -71,7 +71,7 @@ async def home(request: Request):
                 db_booths = booths_by_event.get(ev.id, [])
                 booth_statuses = []
                 for b in db_booths:
-                    bid = make_booth_id(ev.slug, b.language_code)
+                    bid = make_booth_id(ev.slug, b.room_id, b.language_code)
                     mem_booth = booths.get_booth_sync(bid)
                     is_live = mem_booth is not None and mem_booth.ingest_status == "connected"
 

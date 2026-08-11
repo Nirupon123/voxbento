@@ -64,7 +64,7 @@ async def interpreter_landing_page(request: Request) -> Any:
             async with get_session() as session:
                 bms = await list_booth_memberships_for_user(session, uid)
                 for bm in bms:
-                    bid = make_booth_id(bm.booth.event.slug, bm.booth.language_code)
+                    bid = make_booth_id(bm.booth.event.slug, bm.booth.room_id, bm.booth.language_code)
                     mem_booth = booths.get_booth_sync(bid)
                     is_live = mem_booth is not None and mem_booth.ingest_status == "connected"
                     my_booths.append(
@@ -86,9 +86,9 @@ async def interpreter_landing_page(request: Request) -> Any:
     )
 
 
-@router.get("/interpreter/{event_slug}/{language_code}")
+@router.get("/interpreter/{event_slug}/{room_id}/{language_code}")
 async def interpreter_booth_by_identity(
-    request: Request, event_slug: str, language_code: str, token: str = "", language: str = ""
+    request: Request, event_slug: str, room_id: int, language_code: str, token: str = "", language: str = ""
 ) -> Any:
     """Booth page addressed by event_slug and language_code (preferred URL).
 
@@ -98,17 +98,17 @@ async def interpreter_booth_by_identity(
     payload = get_booth_session(request)
     if payload is None:
         return safe_redirect(
-            url=f"/login?next=/interpreter/{event_slug}/{language_code}", status_code=status.HTTP_303_SEE_OTHER
+            url=f"/login?next=/interpreter/{event_slug}/{room_id}/{language_code}", status_code=status.HTTP_303_SEE_OTHER
         )
-    booth_id = make_booth_id(event_slug, language_code)
+    booth_id = make_booth_id(event_slug, room_id, language_code)
     granted_role = await resolve_booth_role(payload, booth_id)
     if granted_role is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have a role assigned for this event. Ask an admin to assign you one.",
         )
-    booth_id = make_booth_id(event_slug, language_code)
-    mediamtx_path = make_mediamtx_path(event_slug, language_code)
+    booth_id = make_booth_id(event_slug, room_id, language_code)
+    mediamtx_path = make_mediamtx_path(event_slug, room_id, language_code)
     channel_id = mediamtx_path
     display_language = language or language_code.upper()
     await _ensure_mediamtx_path(channel_id)

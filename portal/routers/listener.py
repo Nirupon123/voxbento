@@ -133,7 +133,8 @@ async def listen_event_page(request: Request, event_slug: str, code: str | None 
         )
 
         if r.floor_transcription_enabled:
-            channel_id = f"{ev.slug}/floor"
+            from portal.booth_identity import make_mediamtx_path
+            channel_id = make_mediamtx_path(ev.slug, r.id, "floor")
             booths_data.append(
                 {
                     "id": f"floor_{r.id}",
@@ -189,29 +190,20 @@ async def listener_room_audio_delay(
         return {"audio_delay_ms": room.audio_delay_ms}
 
 
-@router.get("/embed/{event_slug}/{language_code}")
-async def embed_listener(
+async def _embed_listener_impl(
     request: Request,
     event_slug: str,
     language_code: str,
-    token: str = Query(""),
-    theme: str = Query("dark"),
-    primary_color: str = Query(_DEFAULT_PRIMARY, alias="primaryColor"),
-    font: str = Query("inter"),
-    captions: bool = Query(False),
-    custom_css_url: str | None = Query(None, alias="customCssUrl"),
-    headless: bool = Query(False),
-    target_lang: str | None = Query(None, alias="targetLang"),
+    room_id: int | None,
+    token: str,
+    theme: str,
+    primary_color: str,
+    font: str,
+    captions: bool,
+    custom_css_url: str | None,
+    headless: bool,
+    target_lang: str | None,
 ):
-    """Serve a standalone, iframe-safe listener embed.
-
-    Authentication: requires a listener JWT in the ?token= query parameter.
-    The token must carry role='listener' and event_slug matching the URL.
-    Use POST /api/v1/tokens/listener?purpose=embed to obtain a 30-minute token.
-
-    Theming: accepts ?theme=dark|light, ?primaryColor=<hex>, ?font=inter|roboto|outfit.
-    All theming values are strictly validated server-side.
-    """
     # ── Authentication ────────────────────────────────────────────────────
     if not token:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing embed token.")
@@ -233,21 +225,38 @@ async def embed_listener(
 
     # ── Resolve booth ─────────────────────────────────────────────────────
     from portal.database import list_booths_for_event, list_rooms_for_event
+    from portal.booth_identity import make_booth_id, make_mediamtx_path
 
     async with get_session() as session:
         ev = await get_event_by_slug(session, event_slug)
         if not ev:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
 
-        if language_code.lower() == "floor":
-            rooms = await list_rooms_for_event(session, ev.id)
-            audio_delay_ms = rooms[0].audio_delay_ms if rooms else 0
-            channel_id = f"{ev.slug}/floor"
-            booth_id = f"{ev.slug}-floor"
+        rooms = await list_rooms_for_event(session, ev.id)
+        if room_id is None:
+            if not rooms:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No rooms found for this event.")
+            if len(rooms) > 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This event has multiple rooms. Please use the /embed/{event_slug}/{room_id}/{language_code} URL instead."
+                )
+            resolved_room_id = rooms[0].id
+            audio_delay_ms = rooms[0].audio_delay_ms
         else:
+            resolved_room_id = room_id
+            room = next((r for r in rooms if r.id == resolved_room_id), None)
+            if not room:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found.")
+            audio_delay_ms = room.audio_delay_ms
+
+        booth_id = make_booth_id(ev.slug, resolved_room_id, language_code.lower())
+        channel_id = make_mediamtx_path(ev.slug, resolved_room_id, language_code.lower())
+
+        if language_code.lower() != "floor":
             db_booths = await list_booths_for_event(session, ev.id)
             booth = next(
-                (b for b in db_booths if b.language_code.lower() == language_code.lower()),
+                (b for b in db_booths if b.language_code.lower() == language_code.lower() and b.room_id == resolved_room_id),
                 None,
             )
             if booth is None:
@@ -255,9 +264,7 @@ async def embed_listener(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"No booth for language '{language_code}' in event '{event_slug}'.",
                 )
-            audio_delay_ms = booth.room.audio_delay_ms if booth.room else 0
-            channel_id = booth.mediamtx_path
-            booth_id = f"{ev.slug}-{language_code.lower()}"
+
     whep_url = f"{settings.mediamtx_whip_base}/{channel_id}/whep"
     host = settings.public_base_url.replace("https://", "").replace("http://", "")
     caption_url = f"wss://{host}/ws/captions/{booth_id}"
@@ -314,4 +321,45 @@ async def embed_listener(
 
     return templates.TemplateResponse(
         request, "embed.html", context, headers=response_headers
+    )
+
+
+@router.get("/embed/{event_slug}/{language_code}")
+async def embed_listener_legacy(
+    request: Request,
+    event_slug: str,
+    language_code: str,
+    token: str = Query(""),
+    theme: str = Query("dark"),
+    primary_color: str = Query(_DEFAULT_PRIMARY, alias="primaryColor"),
+    font: str = Query("inter"),
+    captions: bool = Query(False),
+    custom_css_url: str | None = Query(None, alias="customCssUrl"),
+    headless: bool = Query(False),
+    target_lang: str | None = Query(None, alias="targetLang"),
+):
+    """Serve a standalone, iframe-safe listener embed."""
+    return await _embed_listener_impl(
+        request, event_slug, language_code, None, token, theme, primary_color, font, captions, custom_css_url, headless, target_lang
+    )
+
+
+@router.get("/embed/{event_slug}/{room_id}/{language_code}")
+async def embed_listener_scoped(
+    request: Request,
+    event_slug: str,
+    room_id: int,
+    language_code: str,
+    token: str = Query(""),
+    theme: str = Query("dark"),
+    primary_color: str = Query(_DEFAULT_PRIMARY, alias="primaryColor"),
+    font: str = Query("inter"),
+    captions: bool = Query(False),
+    custom_css_url: str | None = Query(None, alias="customCssUrl"),
+    headless: bool = Query(False),
+    target_lang: str | None = Query(None, alias="targetLang"),
+):
+    """Serve a standalone, iframe-safe listener embed (scoped to a room)."""
+    return await _embed_listener_impl(
+        request, event_slug, language_code, room_id, token, theme, primary_color, font, captions, custom_css_url, headless, target_lang
     )

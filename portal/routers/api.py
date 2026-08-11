@@ -55,17 +55,19 @@ async def provision_listener_token(
         return {"token": token}
 
 
-@router.delete("/events/{event_slug}/booths/{language_code}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/events/{event_slug}/rooms/{room_id}/booths/{language_code}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_booth_by_language(
     request: Request,
     event_slug: str,
+    room_id: int,
     language_code: str,
     token: str = Query(""),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ):
     """Delete a booth from an event."""
     _require_access(request, credentials, token)
-    await booths.delete_booth(event_slug, language_code)
+    # Note: booths.delete_booth doesn't exist, updating it to use the new remove_booth
+    await booths.remove_booth(event_slug, room_id, language_code)
 
 
 @router.post("/events/{event_slug}/booths", status_code=status.HTTP_201_CREATED)
@@ -82,23 +84,38 @@ async def create_event_booth(
     WHIP URL, and WHEP URL.
     """
     _require_access(request, credentials, token)
+    
+    room_id = body.room_id
+    if room_id is None:
+        from portal.database import list_rooms_for_event, get_event_by_slug, get_session
+        async with get_session() as session:
+            ev = await get_event_by_slug(session, event_slug)
+            if ev:
+                rooms = await list_rooms_for_event(session, ev.id)
+                if len(rooms) > 1:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event has multiple rooms. room_id is required.")
+                if rooms:
+                    room_id = rooms[0].id
+        if room_id is None:
+            room_id = 1 # Default fallback if no rooms or event doesn't exist yet
+
     try:
         state = await booths.create_booth(
             event_slug=event_slug,
             language_code=body.language_code,
             language=body.language or body.language_code.upper(),
             instance=body.instance,
-            room_id=body.room_id,
+            room_id=room_id,
         )
     except ValueError as exc:
         if "already exists" in str(exc):
-            booth_id = make_booth_id(event_slug, body.language_code)
-            mtx_path = make_mediamtx_path(event_slug, body.language_code)
+            booth_id = make_booth_id(event_slug, room_id, body.language_code)
+            mtx_path = make_mediamtx_path(event_slug, room_id, body.language_code)
             state = await booths.snapshot(
                 booth_id=booth_id,
                 language=body.language or body.language_code.upper(),
                 channel_id=mtx_path,
-                room_id=body.room_id,
+                room_id=room_id,
             )
         else:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -116,29 +133,27 @@ async def create_event_booth(
             session.add(event)
             await session.flush()
 
-        # 2. Get or Create Room (if body.room_id is provided)
-        db_room_id = None
-        if body.room_id is not None:
-            room_query = await session.execute(
-                select(Room).where(Room.event_id == event.id, Room.eventyay_room_id == str(body.room_id))
+        # 2. Get or Create Room
+        room_query = await session.execute(
+            select(Room).where(Room.event_id == event.id, Room.id == room_id)
+        )
+        room = room_query.scalar_one_or_none()
+        display_name = body.room_name or f"Room {room_id}"
+        if not room:
+            room = Room(
+                id=room_id,
+                event_id=event.id,
+                display_name=display_name,
             )
-            room = room_query.scalar_one_or_none()
-            display_name = body.room_name or f"Room {body.room_id}"
-            if not room:
-                room = Room(
-                    event_id=event.id,
-                    display_name=display_name,
-                    eventyay_room_id=str(body.room_id),
-                )
-                session.add(room)
-            elif room.display_name != display_name:
-                room.display_name = display_name
-            await session.flush()
-            db_room_id = room.id
+            session.add(room)
+        elif room.display_name != display_name:
+            room.display_name = display_name
+        await session.flush()
+        db_room_id = room.id
 
         # 3. Get or Create DBBooth
         booth_query = await session.execute(
-            select(DBBooth).where(DBBooth.event_id == event.id, DBBooth.language_code == body.language_code)
+            select(DBBooth).where(DBBooth.event_id == event.id, DBBooth.room_id == db_room_id, DBBooth.language_code == body.language_code)
         )
         db_booth = booth_query.scalar_one_or_none()
         if not db_booth:
@@ -230,12 +245,27 @@ async def event_booth_state(
     request: Request,
     event_slug: str,
     language_code: str,
+    room_id: int | None = Query(None),
     token: str = Query(""),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict:
     """Event-scoped booth state — never auto-creates a booth."""
     _require_access(request, credentials, token)
-    state = await booths.get_booth_for_event(event_slug, language_code)
+    
+    if room_id is None:
+        from portal.database import list_rooms_for_event, get_event_by_slug, get_session
+        async with get_session() as session:
+            ev = await get_event_by_slug(session, event_slug)
+            if ev:
+                rooms = await list_rooms_for_event(session, ev.id)
+                if len(rooms) > 1:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event has multiple rooms. room_id is required.")
+                if rooms:
+                    room_id = rooms[0].id
+        if room_id is None:
+            room_id = 1
+
+    state = await booths.get_booth_for_event(event_slug, room_id, language_code)
     if state is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -250,13 +280,28 @@ async def event_booth_whip_url(
     event_slug: str,
     language_code: str,
     participant_id: str = Query(...),
+    room_id: int | None = Query(None),
     token: str = Query(""),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict:
     """Event-scoped WHIP URL — validates event ownership before returning."""
     _require_access(request, credentials, token)
-    booth_id = make_booth_id(event_slug, language_code)
-    channel_id = make_mediamtx_path(event_slug, language_code)
+    
+    if room_id is None:
+        from portal.database import list_rooms_for_event, get_event_by_slug, get_session
+        async with get_session() as session:
+            ev = await get_event_by_slug(session, event_slug)
+            if ev:
+                rooms = await list_rooms_for_event(session, ev.id)
+                if len(rooms) > 1:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event has multiple rooms. room_id is required.")
+                if rooms:
+                    room_id = rooms[0].id
+        if room_id is None:
+            room_id = 1
+
+    booth_id = make_booth_id(event_slug, room_id, language_code)
+    channel_id = make_mediamtx_path(event_slug, room_id, language_code)
     try:
         await booths.validate_booth_event(booth_id, event_slug)
     except PermissionError as exc:

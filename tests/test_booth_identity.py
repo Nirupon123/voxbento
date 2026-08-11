@@ -137,21 +137,21 @@ class TestValidateInstance:
 
 class TestMakeBoothId:
     def test_basic(self):
-        assert make_booth_id("pycon2026", "en") == "pycon2026-en"
+        assert make_booth_id("pycon2026", 1, "en") == "pycon2026-1-en"
 
     def test_with_hyphens_in_slug(self):
-        assert make_booth_id("my-great-event", "fr") == "my-great-event-fr"
+        assert make_booth_id("my-great-event", 2, "fr") == "my-great-event-2-fr"
 
     def test_normalises_inputs(self):
-        assert make_booth_id("PyCon2026", "EN") == "pycon2026-en"
+        assert make_booth_id("PyCon2026", 1, "EN") == "pycon2026-1-en"
 
     def test_invalid_slug_raises(self):
         with pytest.raises(ValueError):
-            make_booth_id("", "en")
+            make_booth_id("", 1, "en")
 
     def test_invalid_code_raises(self):
         with pytest.raises(ValueError):
-            make_booth_id("pycon2026", "xyz")
+            make_booth_id("pycon2026", 1, "xyz")
 
 
 # ── make_mediamtx_path ────────────────────────────────────────────────────────
@@ -159,21 +159,21 @@ class TestMakeBoothId:
 
 class TestMakeMediamtxPath:
     def test_basic(self):
-        assert make_mediamtx_path("pycon2026", "en") == "pycon2026/en"
+        assert make_mediamtx_path("pycon2026", 1, "en") == "pycon2026/1/en"
 
     def test_with_hyphens(self):
-        assert make_mediamtx_path("my-great-event", "fr") == "my-great-event/fr"
+        assert make_mediamtx_path("my-great-event", 2, "fr") == "my-great-event/2/fr"
 
     def test_normalises_inputs(self):
-        assert make_mediamtx_path("PyCon2026", "EN") == "pycon2026/en"
+        assert make_mediamtx_path("PyCon2026", 1, "EN") == "pycon2026/1/en"
 
     def test_invalid_slug_raises(self):
         with pytest.raises(ValueError):
-            make_mediamtx_path("", "en")
+            make_mediamtx_path("", 1, "en")
 
     def test_invalid_code_raises(self):
         with pytest.raises(ValueError):
-            make_mediamtx_path("pycon2026", "xyz")
+            make_mediamtx_path("pycon2026", 1, "xyz")
 
 
 # ── parse_booth_id ────────────────────────────────────────────────────────────
@@ -181,20 +181,20 @@ class TestMakeMediamtxPath:
 
 class TestParseBoothId:
     def test_simple(self):
-        assert parse_booth_id("pycon2026-en") == ("pycon2026", "en")
+        assert parse_booth_id("pycon2026-1-en") == ("pycon2026", 1, "en")
 
     def test_slug_with_hyphens(self):
-        assert parse_booth_id("my-great-event-fr") == ("my-great-event", "fr")
+        assert parse_booth_id("my-great-event-2-fr") == ("my-great-event", 2, "fr")
 
     def test_normalises_case(self):
-        assert parse_booth_id("PyCon2026-EN") == ("pycon2026", "en")
+        assert parse_booth_id("PyCon2026-1-EN") == ("pycon2026", 1, "en")
 
     def test_strips_whitespace(self):
-        assert parse_booth_id("  pycon2026-en  ") == ("pycon2026", "en")
+        assert parse_booth_id("  pycon2026-1-en  ") == ("pycon2026", 1, "en")
 
     def test_missing_language_raises(self):
-        with pytest.raises(ValueError, match="event_slug"):
-            parse_booth_id("pycon2026")
+        with pytest.raises(ValueError):
+            parse_booth_id("pycon2026-1")
 
     def test_empty_string_raises(self):
         with pytest.raises(ValueError):
@@ -202,11 +202,11 @@ class TestParseBoothId:
 
     def test_three_letter_code_rejected(self):
         with pytest.raises(ValueError):
-            parse_booth_id("pycon2026-eng")
+            parse_booth_id("pycon2026-1-eng")
 
     def test_unrecognised_code_rejected(self):
         with pytest.raises(ValueError):
-            parse_booth_id("pycon2026-zz")
+            parse_booth_id("pycon2026-1-zz")
 
 
 # ── booth_id_to_mediamtx_path ────────────────────────────────────────────────
@@ -214,10 +214,10 @@ class TestParseBoothId:
 
 class TestBoothIdToMediamtxPath:
     def test_basic(self):
-        assert booth_id_to_mediamtx_path("pycon2026-en") == "pycon2026/en"
+        assert booth_id_to_mediamtx_path("pycon2026-1-en") == "pycon2026/1/en"
 
     def test_slug_with_hyphens(self):
-        assert booth_id_to_mediamtx_path("my-great-event-fr") == "my-great-event/fr"
+        assert booth_id_to_mediamtx_path("my-great-event-2-fr") == "my-great-event/2/fr"
 
     def test_invalid_id_raises(self):
         with pytest.raises(ValueError):
@@ -229,29 +229,29 @@ class TestBoothIdToMediamtxPath:
 
 class TestMediamtxPathToBoothId:
     def test_basic(self):
-        assert mediamtx_path_to_booth_id("pycon2026/en") == "pycon2026-en"
+        assert mediamtx_path_to_booth_id("pycon2026/1/en") == "pycon2026-1-en"
 
     def test_with_hyphens(self):
-        assert mediamtx_path_to_booth_id("my-great-event/fr") == "my-great-event-fr"
+        assert mediamtx_path_to_booth_id("my-great-event/2/fr") == "my-great-event-2-fr"
 
     def test_strips_slashes(self):
-        assert mediamtx_path_to_booth_id("/pycon2026/en/") == "pycon2026-en"
+        assert mediamtx_path_to_booth_id("/pycon2026/1/en/") == "pycon2026-1-en"
 
     def test_too_many_segments_raises(self):
-        with pytest.raises(ValueError, match="exactly two segments"):
-            mediamtx_path_to_booth_id("a/b/c")
+        with pytest.raises(ValueError, match="exactly three segments"):
+            mediamtx_path_to_booth_id("a/b/c/d")
 
     def test_single_segment_raises(self):
-        with pytest.raises(ValueError, match="exactly two segments"):
+        with pytest.raises(ValueError, match="exactly three segments"):
             mediamtx_path_to_booth_id("pycon2026")
 
     def test_invalid_slug_raises(self):
         with pytest.raises(ValueError):
-            mediamtx_path_to_booth_id("-invalid/en")
+            mediamtx_path_to_booth_id("-invalid/1/en")
 
     def test_invalid_code_raises(self):
         with pytest.raises(ValueError):
-            mediamtx_path_to_booth_id("pycon2026/xyz")
+            mediamtx_path_to_booth_id("pycon2026/1/xyz")
 
 
 # ── Bidirectional round-trip ──────────────────────────────────────────────────
@@ -259,29 +259,29 @@ class TestMediamtxPathToBoothId:
 
 class TestRoundTrip:
     @pytest.mark.parametrize(
-        "event_slug,lang_code",
+        "event_slug,room_id,lang_code",
         [
-            ("pycon2026", "en"),
-            ("my-great-event", "fr"),
-            ("fossasia2026", "de"),
-            ("event1", "zh"),
+            ("pycon2026", 1, "en"),
+            ("my-great-event", 2, "fr"),
+            ("fossasia2026", 3, "de"),
+            ("event1", 4, "zh"),
         ],
     )
-    def test_booth_id_roundtrip(self, event_slug, lang_code):
-        booth_id = make_booth_id(event_slug, lang_code)
+    def test_booth_id_roundtrip(self, event_slug, room_id, lang_code):
+        booth_id = make_booth_id(event_slug, room_id, lang_code)
         path = booth_id_to_mediamtx_path(booth_id)
         recovered_id = mediamtx_path_to_booth_id(path)
         assert recovered_id == booth_id
 
     @pytest.mark.parametrize(
-        "event_slug,lang_code",
+        "event_slug,room_id,lang_code",
         [
-            ("pycon2026", "en"),
-            ("my-great-event", "fr"),
+            ("pycon2026", 1, "en"),
+            ("my-great-event", 2, "fr"),
         ],
     )
-    def test_mediamtx_path_roundtrip(self, event_slug, lang_code):
-        path = make_mediamtx_path(event_slug, lang_code)
+    def test_mediamtx_path_roundtrip(self, event_slug, room_id, lang_code):
+        path = make_mediamtx_path(event_slug, room_id, lang_code)
         booth_id = mediamtx_path_to_booth_id(path)
         recovered_path = booth_id_to_mediamtx_path(booth_id)
         assert recovered_path == path

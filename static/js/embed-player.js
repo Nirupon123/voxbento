@@ -105,10 +105,14 @@
           var msg = JSON.parse(ev.data);
           var isValid = false;
           
-          if (msg.type === 'caption') {
-              isValid = true;
-          } else if (msg.type === 'translation' && msg.language_code === TARGET_LANG) {
-              isValid = true;
+          if (TARGET_LANG) {
+            if (msg.type === 'translation' && msg.language_code === TARGET_LANG) {
+                isValid = true;
+            }
+          } else {
+            if (msg.type === 'caption') {
+                isValid = true;
+            }
           }
           
           if (isValid) {

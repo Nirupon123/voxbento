@@ -20,6 +20,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    op.execute("DROP TABLE IF EXISTS _alembic_tmp_booths")
+    
     # Pre-migration safety check: Fail loudly if any booth has room_id IS NULL
     connection = op.get_bind()
     null_booths = connection.execute(sa.text("SELECT id FROM booths WHERE room_id IS NULL")).fetchall()

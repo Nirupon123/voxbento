@@ -246,7 +246,7 @@ class TestEventCRUD:
         event, _, _ = seed_event
         async with _client() as c:
             resp = await c.get(f"/admin/events/{event.id}/", cookies=admin_cookie)
-        assert b"/interpreter/testcon/en" in resp.content
+        assert b"/interpreter/testcon/1/en" in resp.content
 
     @pytest.mark.anyio
     async def test_delete_event(self, admin_cookie, seed_event):
@@ -319,7 +319,7 @@ class TestRoomCRUD:
                 f"/admin/events/{event.id}/rooms/{room.id}/",
                 cookies=admin_cookie,
             )
-        assert b"/interpreter/testcon/en" in resp.content
+        assert b"/interpreter/testcon/1/en" in resp.content
         assert b"/listener/testcon" in resp.content
 
     @pytest.mark.anyio
@@ -482,7 +482,7 @@ class TestBoothCRUD:
                 f"/admin/events/{event.id}/rooms/{room.id}/booths/{booth.id}/",
                 cookies=admin_cookie,
             )
-        assert b"testcon/en/whep" in resp.content
+        assert b"testcon/1/en/whep" in resp.content
 
     @pytest.mark.anyio
     async def test_booth_detail_shows_mediamtx_path(self, admin_cookie, seed_event):
@@ -492,7 +492,7 @@ class TestBoothCRUD:
                 f"/admin/events/{event.id}/rooms/{room.id}/booths/{booth.id}/",
                 cookies=admin_cookie,
             )
-        assert b"testcon/en" in resp.content
+        assert b"testcon/1/en" in resp.content
 
     @pytest.mark.anyio
     async def test_booth_detail_shows_invite_tokens(self, admin_cookie, seed_event):

@@ -230,6 +230,20 @@ async def delete_room(session: AsyncSession, room_id: int) -> bool:
     room = await get_room_by_id(session, room_id)
     if room is None:
         return False
+    # Break the circular FK cycle: rooms.relay_booth_id → booths.id ↔ booths.room_id → rooms.id
+    # null out relay_booth_id to remove the back-reference
+    room.relay_booth_id = None
+    await session.flush()
+    # delete all booths belonging to this room explicitly
+    from sqlalchemy import delete as sa_delete
+    from sqlalchemy import select as sa_select
+    # First delete booth memberships and tokens to avoid orphans since SQLite FKs are OFF
+    booth_ids = sa_select(DBBooth.id).where(DBBooth.room_id == room_id)
+    await session.execute(sa_delete(BoothMembership).where(BoothMembership.booth_id.in_(booth_ids)))
+    await session.execute(sa_delete(InviteToken).where(InviteToken.booth_id.in_(booth_ids)))
+    await session.execute(sa_delete(DBBooth).where(DBBooth.room_id == room_id))
+    await session.flush()
+    # now safe to delete the room
     await session.delete(room)
     await session.flush()
     return True

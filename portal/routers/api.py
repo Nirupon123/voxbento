@@ -8,7 +8,14 @@ from sqlalchemy.orm import selectinload
 from portal.auth import create_embed_token, create_listener_token, security
 from portal.booth_identity import make_booth_id, make_mediamtx_path
 from portal.config import settings
-from portal.database import create_invite_token, get_session, log_usage_metric, verify_api_key
+from portal.database import (
+    create_invite_token,
+    get_event_by_slug,
+    get_session,
+    list_rooms_for_event,
+    log_usage_metric,
+    verify_api_key,
+)
 from portal.globals import booths
 from portal.models import DBBooth, Event, Room
 from portal.rate_limit import check_rate_limit
@@ -84,74 +91,76 @@ async def create_event_booth(
     WHIP URL, and WHEP URL.
     """
     _require_access(request, credentials, token)
-    
-    room_id = body.room_id
-    if room_id is None:
-        from portal.database import list_rooms_for_event, get_event_by_slug, get_session
-        async with get_session() as session:
-            ev = await get_event_by_slug(session, event_slug)
-            if ev:
-                rooms = await list_rooms_for_event(session, ev.id)
-                if len(rooms) > 1:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event has multiple rooms. room_id is required.")
-                if rooms:
-                    room_id = rooms[0].id
-        if room_id is None:
-            room_id = 1 # Default fallback if no rooms or event doesn't exist yet
-
-    try:
-        state = await booths.create_booth(
-            event_slug=event_slug,
-            language_code=body.language_code,
-            language=body.language or body.language_code.upper(),
-            instance=body.instance,
-            room_id=room_id,
-        )
-    except ValueError as exc:
-        if "already exists" in str(exc):
-            booth_id = make_booth_id(event_slug, room_id, body.language_code)
-            mtx_path = make_mediamtx_path(event_slug, room_id, body.language_code)
-            state = await booths.snapshot(
-                booth_id=booth_id,
-                language=body.language or body.language_code.upper(),
-                channel_id=mtx_path,
-                room_id=room_id,
-            )
-        else:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    mediamtx_path = state["mediamtx_path"]
-    await _ensure_mediamtx_path(mediamtx_path)
-    state["whip_url"] = f"{settings.mediamtx_whip_base}/{mediamtx_path}/whip"
-    state["whep_url"] = f"{settings.mediamtx_whip_base}/{mediamtx_path}/whep"
 
     async with get_session() as session:
-        # 1. Get or Create Event
+        # Get or Create Event
         event_query = await session.execute(select(Event).where(Event.slug == event_slug))
         event = event_query.scalar_one_or_none()
         if not event:
-            event = Event(slug=event_slug, display_name=event_slug.title())
+            try:
+                event = Event(slug=event_slug, display_name=event_slug.title())
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
             session.add(event)
             await session.flush()
 
-        # 2. Get or Create Room
-        room_query = await session.execute(
-            select(Room).where(Room.event_id == event.id, Room.id == room_id)
-        )
-        room = room_query.scalar_one_or_none()
-        display_name = body.room_name or f"Room {room_id}"
-        if not room:
-            room = Room(
-                id=room_id,
-                event_id=event.id,
-                display_name=display_name,
+        # Get or Create Room
+        room_id = body.room_id
+        if room_id is None:
+            rooms = await list_rooms_for_event(session, event.id)
+            if len(rooms) > 1:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event has multiple rooms. room_id is required.")
+            if rooms:
+                room = rooms[0]
+            else:
+                room = Room(event_id=event.id, display_name=body.room_name or "Main Room")
+                session.add(room)
+                await session.flush()
+        else:
+            room_query = await session.execute(
+                select(Room).where(Room.event_id == event.id, Room.id == room_id)
             )
-            session.add(room)
-        elif room.display_name != display_name:
-            room.display_name = display_name
-        await session.flush()
+            room = room_query.scalar_one_or_none()
+            display_name = body.room_name or f"Room {room_id}"
+            if not room:
+                room = Room(event_id=event.id, display_name=display_name)
+                # Don't force id=room_id to avoid unique constraint violations
+                session.add(room)
+                await session.flush()
+            elif room.display_name != display_name:
+                room.display_name = display_name
+                await session.flush()
+
         db_room_id = room.id
 
-        # 3. Get or Create DBBooth
+        # Create Booth in memory state
+        try:
+            state = await booths.create_booth(
+                event_slug=event_slug,
+                language_code=body.language_code,
+                language=body.language or body.language_code.upper(),
+                instance=body.instance,
+                room_id=db_room_id,
+            )
+        except ValueError as exc:
+            if "already exists" in str(exc):
+                booth_id = make_booth_id(event_slug, db_room_id, body.language_code)
+                mtx_path = make_mediamtx_path(event_slug, db_room_id, body.language_code)
+                state = await booths.snapshot(
+                    booth_id=booth_id,
+                    language=body.language or body.language_code.upper(),
+                    channel_id=mtx_path,
+                    room_id=db_room_id,
+                )
+            else:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+        mediamtx_path = state["mediamtx_path"]
+        await _ensure_mediamtx_path(mediamtx_path)
+        state["whip_url"] = f"{settings.mediamtx_whip_base}/{mediamtx_path}/whip"
+        state["whep_url"] = f"{settings.mediamtx_whip_base}/{mediamtx_path}/whep"
+
+        # Get or Create DBBooth
         booth_query = await session.execute(
             select(DBBooth).where(DBBooth.event_id == event.id, DBBooth.room_id == db_room_id, DBBooth.language_code == body.language_code)
         )
@@ -166,7 +175,7 @@ async def create_event_booth(
             session.add(db_booth)
             await session.flush()
 
-        # 4. Generate InviteToken
+        # Generate InviteToken
         invite = await create_invite_token(
             session,
             booth_id=db_booth.id,
@@ -251,9 +260,8 @@ async def event_booth_state(
 ) -> dict:
     """Event-scoped booth state — never auto-creates a booth."""
     _require_access(request, credentials, token)
-    
+
     if room_id is None:
-        from portal.database import list_rooms_for_event, get_event_by_slug, get_session
         async with get_session() as session:
             ev = await get_event_by_slug(session, event_slug)
             if ev:
@@ -286,9 +294,8 @@ async def event_booth_whip_url(
 ) -> dict:
     """Event-scoped WHIP URL — validates event ownership before returning."""
     _require_access(request, credentials, token)
-    
+
     if room_id is None:
-        from portal.database import list_rooms_for_event, get_event_by_slug, get_session
         async with get_session() as session:
             ev = await get_event_by_slug(session, event_slug)
             if ev:

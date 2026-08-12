@@ -224,8 +224,8 @@ async def _embed_listener_impl(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token is not valid for this event.")
 
     # ── Resolve booth ─────────────────────────────────────────────────────
-    from portal.database import list_booths_for_event, list_rooms_for_event
     from portal.booth_identity import make_booth_id, make_mediamtx_path
+    from portal.database import list_booths_for_event, list_rooms_for_event
 
     async with get_session() as session:
         ev = await get_event_by_slug(session, event_slug)

@@ -545,6 +545,8 @@ class BoothRegistry:
         transcription worker, and removes the in-memory state.
         """
         booth_id = make_booth_id(event_slug, room_id, language_code)
+        async with self._lock:
+            self._booths.pop(booth_id, None)
 
     async def validate_booth_event(self, booth_id: str, expected_event: str) -> None:
         """Raise PermissionError if *booth_id* does not belong to *expected_event*.

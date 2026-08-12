@@ -156,8 +156,8 @@ async def test_full_multi_event_scenario(db: AsyncSession):
     # ── Verify mediamtx_path derivation ──────────────────────────
     loaded_en = await get_booth_by_id(db, pycon_en.id)
     loaded_zh = await get_booth_by_id(db, foss_zh.id)
-    assert loaded_en.mediamtx_path == "pycon2026/en"
-    assert loaded_zh.mediamtx_path == "fossasia2026/zh"
+    assert loaded_en.mediamtx_path == "pycon2026/1/en"
+    assert loaded_zh.mediamtx_path == "fossasia2026/3/zh"
 
     # ── Create invite tokens with different roles ────────────────
     tok_interp = await create_invite_token(
@@ -439,7 +439,7 @@ async def test_persistence_across_engine_reconnect(db_file):
             booth2 = await get_booth_by_id(session, saved_booth_id)
             assert booth2 is not None
             assert booth2.language_code == "ja"
-            assert booth2.mediamtx_path == "persist-test/ja"
+            assert booth2.mediamtx_path == "persist-test/1/ja"
 
             tok2 = await get_invite_token(session, saved_token)
             assert tok2 is not None

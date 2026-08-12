@@ -273,7 +273,7 @@ async def test_booth_mediamtx_path_derived(db: AsyncSession):
     # Reload with event joinedloaded
     loaded = await get_booth_by_id(db, booth.id)
     assert loaded is not None
-    assert loaded.mediamtx_path == "pycon2026/en"
+    assert loaded.mediamtx_path == "pycon2026/1/en"
 
 
 @pytest.mark.anyio

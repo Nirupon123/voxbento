@@ -341,16 +341,16 @@ def parse_booth_id(booth_id: str) -> tuple[str, int, str]:
         )
     # booth_id is event_slug-room_id-language_code
     # event_slug can contain hyphens, room_id and language_code cannot.
-    # So the last hyphen separates room_id and language_code, 
+    # So the last hyphen separates room_id and language_code,
     # and the second to last hyphen separates event_slug and room_id.
     parts = normalised.rsplit("-", 2)
     if len(parts) != 3:
         raise ValueError(f"Invalid booth ID format: '{booth_id}'.")
-    
+
     event_slug = parts[0]
     room_id = int(parts[1])
     language_code = parts[2]
-    
+
     validate_event_slug(event_slug)
     validate_language_code(language_code)
     return event_slug, room_id, language_code

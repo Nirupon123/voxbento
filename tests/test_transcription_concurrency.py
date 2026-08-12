@@ -117,7 +117,7 @@ async def seed_data():
                 transcription_model="gpt-4o",
             )
             session.add(b)
-            booths.append((e1.slug, b.language_code, f"{e1.slug}-{b.language_code}", "openai"))
+            booths.append((e1.slug, r.id, b.language_code, f"{e1.slug}-{r.id}-{b.language_code}", "openai"))
 
         # Event 2: 6 NVIDIA booths
         for i, lang_code in enumerate(nvidia_langs):
@@ -134,7 +134,7 @@ async def seed_data():
                 transcription_model="parakeet-rnnt",
             )
             session.add(b)
-            booths.append((e2.slug, b.language_code, f"{e2.slug}-{b.language_code}", "nvidia"))
+            booths.append((e2.slug, r.id, b.language_code, f"{e2.slug}-{r.id}-{b.language_code}", "nvidia"))
 
         # Event 3: 4 Local booths
         for i, lang_code in enumerate(local_langs):
@@ -151,7 +151,7 @@ async def seed_data():
                 transcription_model="tiny",
             )
             session.add(b)
-            booths.append((e3.slug, b.language_code, f"{e3.slug}-{b.language_code}", "local"))
+            booths.append((e3.slug, r.id, b.language_code, f"{e3.slug}-{r.id}-{b.language_code}", "local"))
 
         await session.flush()
         return booths
@@ -180,10 +180,10 @@ async def test_high_concurrency_isolation_and_capacity_limits():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Launch all 16 POST requests simultaneously
         tasks = []
-        for slug, lang, booth_id, provider in booths:
+        for slug, room_id, lang, booth_id, provider in booths:
             data = {"event_slug": slug, "language_code": lang}
             tasks.append(
-                client.post(f"/api/events/{slug}/booths/{lang}/transcription/start", json=data, cookies=cookies)
+                client.post(f"/api/events/{slug}/rooms/{room_id}/booths/{lang}/transcription/start", json=data, cookies=cookies)
             )
 
         responses = await asyncio.gather(*tasks)
@@ -218,8 +218,8 @@ async def test_high_concurrency_isolation_and_capacity_limits():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         stop_tasks = []
         # Try to stop all 16 booths (the 2 rate-limited ones should just gracefully do nothing)
-        for slug, lang, booth_id, provider in booths:
-            stop_tasks.append(client.post(f"/api/events/{slug}/booths/{lang}/transcription/stop", cookies=cookies))
+        for slug, room_id, lang, booth_id, provider in booths:
+            stop_tasks.append(client.post(f"/api/events/{slug}/rooms/{room_id}/booths/{lang}/transcription/stop", cookies=cookies))
 
         await asyncio.gather(*stop_tasks)
 

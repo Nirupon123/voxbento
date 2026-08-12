@@ -171,8 +171,8 @@ jobs:
         run: |
           source /tmp/ci-helpers.sh
           # Booth pages now require auth — unauthenticated requests redirect to /login
-          assert_http "http://${CI_HOST}:${PORTAL_PORT}/interpreter/ci-event/en" \
-                      "GET /interpreter/ci-event/en (no auth → 303)" "303"
+          assert_http "http://${CI_HOST}:${PORTAL_PORT}/interpreter/ci-event/1/en" \
+                      "GET /interpreter/ci-event/1/en (no auth → 303)" "303"
 
 
       - name: Portal ingest-status API
@@ -295,8 +295,8 @@ jobs:
 
           # With a valid user_token but no event membership → 403 on interpreter page
           code=$(curl -s -o /dev/null -w '%{http_code}' -b "user_token=${USER_COOKIE}" \
-            "${BASE}/interpreter/ci-smoke/en")
-          echo "GET /interpreter/ci-smoke/en (user, no membership) → $code"
+            "${BASE}/interpreter/ci-smoke/1/en")
+          echo "GET /interpreter/ci-smoke/1/en (user, no membership) → $code"
           [ "$code" = "403" ] || { echo "FAIL: expected 403 without membership"; exit 1; }
 
 

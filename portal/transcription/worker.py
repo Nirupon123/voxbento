@@ -41,7 +41,10 @@ async def transcription_worker(
     room_id: int | None = None,
 ):
     logger.info(f"Starting {provider_name} transcription worker for booth {booth_id}")
-    rtsp_url = f"{settings.mediamtx_rtsp_base}/{event_slug}/{language_code}"
+    from portal.booth_identity import make_mediamtx_path
+    channel_path = make_mediamtx_path(event_slug, room_id, language_code)
+    rtsp_url = f"{settings.mediamtx_rtsp_base}/{channel_path}"
+    print(f"WORKER: rtsp_url={rtsp_url}")
     provider = PROVIDERS.get(provider_name, PROVIDERS["local"])
     sample_rate = "24000" if provider_name == "openai" else "16000"
 
@@ -142,6 +145,7 @@ async def start_transcription_worker(
     transcription_language: str | None = None,
     room_id: int | None = None,
 ):
+    print("WORKER START TRIGGERED for booth", booth_id)
     async with active_workers_lock:
         if booth_id in active_workers:
             logger.info(f"Transcription worker for {booth_id} is already running.")
@@ -166,6 +170,7 @@ async def start_transcription_worker(
                 room_id,
             )
         )
+        print("WORKER TASK CREATED for booth", booth_id)
         active_workers[booth_id] = {"task": task, "provider": provider, "model_size": model_size, "stderr_task": None}
 
 

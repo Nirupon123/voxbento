@@ -22,6 +22,7 @@
     const CAPTIONS_ON = config.captions_enabled;
     const EMBED_TOKEN = config.token;
     const TARGET_LANG = config.target_lang_code;
+    const SOURCE_LANG = config.source_lang_code;
 
     const audioEl    = document.getElementById('embed-audio');
     const playBtn    = document.getElementById('play-btn');
@@ -104,14 +105,17 @@
         try {
           var msg = JSON.parse(ev.data);
           var isValid = false;
-          
-          if (TARGET_LANG) {
-            if (msg.type === 'translation' && msg.language_code === TARGET_LANG) {
-                isValid = true;
-            }
+          if (config.headless) {
+            // Headless: Forward both the original captions and the requested translations
+            if (msg.type === 'caption') isValid = true;
+            if (msg.type === 'translation' && msg.language_code === TARGET_LANG) isValid = true;
           } else {
-            if (msg.type === 'caption') {
-                isValid = true;
+            // Visible UI: Only show one language track to prevent overlapping text
+            const isTranslating = TARGET_LANG && TARGET_LANG !== SOURCE_LANG;
+            if (isTranslating) {
+              if (msg.type === 'translation' && msg.language_code === TARGET_LANG) isValid = true;
+            } else {
+              if (msg.type === 'caption') isValid = true;
             }
           }
           
@@ -142,7 +146,8 @@
                 type: 'subtitle',
                 payload: { 
                   text: displayText, 
-                  language: TARGET_LANG,
+                  language: msg.language_code || SOURCE_LANG,
+                  msg_type: msg.type,
                   raw_status: status,
                   raw_text: msg.text
                 }

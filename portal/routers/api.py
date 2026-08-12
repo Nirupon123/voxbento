@@ -315,16 +315,17 @@ async def ingest_status_api(channel_id: str) -> dict:
     return {"channel_id": channel_id, "state": "mediamtx", "reachable": await _check_mediamtx()}
 
 
-@router.post("/events/{event_slug}/booths/{language_code}/transcription/start")
+@router.post("/events/{event_slug}/rooms/{room_id}/booths/{language_code}/transcription/start")
 async def api_transcription_start(
     event_slug: str,
+    room_id: int,
     language_code: str,
     request: Request,
     token: str = Query(""),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ):
     _require_access(request, credentials, token)
-    booth_id = make_booth_id(event_slug, language_code)
+    booth_id = make_booth_id(event_slug, room_id, language_code)
     async with get_session() as session:
         stmt = (
             select(DBBooth)
@@ -334,6 +335,7 @@ async def api_transcription_start(
         )
         db_booth = await session.scalar(stmt)
         if not db_booth or not db_booth.transcription_enabled:
+            print("API START: Transcription disabled for booth", booth_id, "db_booth=", db_booth, "enabled=", getattr(db_booth, 'transcription_enabled', None))
             return {"status": "disabled", "message": "Transcription is not enabled for this booth."}
         provider = db_booth.transcription_provider
         model_size = db_booth.transcription_model
@@ -360,18 +362,20 @@ async def api_transcription_start(
         )
     except ValueError as e:
         raise HTTPException(status_code=429, detail=str(e))
+    print("API START: Successfully started worker for booth", booth_id)
     return {"status": "started", "provider": provider, "model": model_size}
 
 
-@router.post("/events/{event_slug}/booths/{language_code}/transcription/stop")
+@router.post("/events/{event_slug}/rooms/{room_id}/booths/{language_code}/transcription/stop")
 async def api_transcription_stop(
     request: Request,
     event_slug: str,
+    room_id: int,
     language_code: str,
     token: str = Query(""),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ):
     _require_access(request, credentials, token)
-    booth_id = make_booth_id(event_slug, language_code)
+    booth_id = make_booth_id(event_slug, room_id, language_code)
     await stop_transcription_worker(booth_id)
     return {"status": "stopped"}

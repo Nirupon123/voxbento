@@ -502,10 +502,10 @@
       opt.textContent = b.language_name;
       opt.dataset.type = 'whep';
       if (b.language_code === 'floor') {
-        opt.dataset.boothId = '{{ event.slug }}-floor';
+        opt.dataset.boothId = '{{ event.slug }}-' + roomId + '-floor';
         opt.dataset.languageCode = 'floor';
       } else {
-        opt.dataset.boothId = '{{ event.slug }}-' + b.language_code;
+        opt.dataset.boothId = '{{ event.slug }}-' + roomId + '-' + b.language_code;
         opt.dataset.languageCode = b.language_code;
       }
       opt.dataset.boothObjId = b.id;

@@ -1094,9 +1094,9 @@ async function startLiveIngest() {
     // Start backend transcription
     try {
       const payload = { event_slug: portal.dataset.eventSlug, language_code: portal.dataset.languageCode }
-      await fetch(`/api/events/${portal.dataset.eventSlug}/booths/${portal.dataset.languageCode}/transcription/start`, {
+      await fetch(`/api/events/${portal.dataset.eventSlug}/rooms/${portal.dataset.roomId}/booths/${portal.dataset.languageCode}/transcription/start`, {
         method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        headers: { 'Authorization': `Bearer ${portal.dataset.boothToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
     } catch (err) {
@@ -1143,7 +1143,7 @@ async function stopLiveIngest() {
     // If someone else is active, it means they took over, so let THEM manage the transcription!
     if (state.activeInterpreterId === null || state.activeInterpreterId === state.participantId) {
       try {
-        await fetch(`/api/events/${portal.dataset.eventSlug}/booths/${portal.dataset.languageCode}/transcription/stop`, { method: 'POST', headers: authHeaders() })
+        await fetch(`/api/events/${portal.dataset.eventSlug}/rooms/${portal.dataset.roomId}/booths/${portal.dataset.languageCode}/transcription/stop`, { method: 'POST', headers: authHeaders() })
       } catch (err) {
         console.warn('Failed to stop transcription worker:', err)
       }
@@ -1196,9 +1196,9 @@ function attemptRelayStart(attempt) {
       // Start backend transcription worker now that WHIP ingest is live
       if (portal.dataset.eventSlug && portal.dataset.languageCode) {
         try {
-          await fetch(`/api/events/${portal.dataset.eventSlug}/booths/${portal.dataset.languageCode}/transcription/start`, {
+          await fetch(`/api/events/${portal.dataset.eventSlug}/rooms/${portal.dataset.roomId}/booths/${portal.dataset.languageCode}/transcription/start`, {
             method: 'POST',
-            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            headers: { 'Authorization': `Bearer ${portal.dataset.boothToken}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               event_slug: portal.dataset.eventSlug,
               language_code: portal.dataset.languageCode,

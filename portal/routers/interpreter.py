@@ -53,6 +53,7 @@ async def interpreter_landing_page(request: Request) -> Any:
                 "event_name": event_name,
                 "language_name": language_name,
                 "room_name": room_name,
+                "room_id": payload.get("room_id"),
                 "event_slug": payload["event_slug"],
                 "language_code": payload["language_code"],
                 "role": payload.get("role", "interpreter"),
@@ -74,6 +75,7 @@ async def interpreter_landing_page(request: Request) -> Any:
                             "event_name": bm.booth.event.display_name,
                             "language_name": bm.booth.language_name,
                             "room_name": bm.booth.room.display_name if bm.booth.room else "",
+                            "room_id": bm.booth.room_id,
                             "event_slug": bm.booth.event.slug,
                             "language_code": bm.booth.language_code,
                             "role": bm.role,
@@ -132,7 +134,7 @@ async def interpreter_booth_by_identity(
             if db_booth.room.relay_booth_id:
                 relay_b = await get_booth_by_id(session, db_booth.room.relay_booth_id)
                 if relay_b:
-                    relay_channel = make_mediamtx_path(event_slug, relay_b.language_code)
+                    relay_channel = make_mediamtx_path(event_slug, relay_b.room_id, relay_b.language_code)
                     relay_whep_url = f"{settings.mediamtx_whip_base}/{relay_channel}/whep"
                     relay_language_name = relay_b.language_name
     default_jitsi_url = _make_jitsi_url(settings.effective_jitsi_base_url, settings.default_jitsi_room)
@@ -147,6 +149,7 @@ async def interpreter_booth_by_identity(
             "booth_language": display_language,
             "booth_channel_id": channel_id,
             "event_slug": event_slug,
+            "room_id": room_id,
             "language_code": language_code,
             "whip_url": whip_url,
             "whep_url": whep_url,

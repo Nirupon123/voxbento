@@ -140,7 +140,7 @@ async def listen_event_page(request: Request, event_slug: str, code: str | None 
                     "id": f"floor_{r.id}",
                     "room_id": r.id,
                     "language_code": "floor",
-                    "language_name": "🌍 Floor Audio (Original)",
+                    "language_name": "Floor Audio (Original)",
                     "channel_id": channel_id,
                     "whep_url": f"{settings.mediamtx_whip_base}/{channel_id}/whep",
                     "audio_delay_ms": r.audio_delay_ms,

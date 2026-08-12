@@ -751,11 +751,15 @@ async def save_transcript_segment(booth_id_str: str, text: str, room_id: int | N
     from portal.models import DBBooth, Event
 
     parts = booth_id_str.split("-")
-    if len(parts) < 2:
-        return None
-
-    language_code = parts[-1]
-    event_slug = "-".join(parts[:-1])
+    if len(parts) < 3:
+        # Fallback for floor or invalid
+        language_code = parts[-1] if parts else "floor"
+        event_slug = "-".join(parts[:-1]) if len(parts) > 1 else ""
+        parsed_room_id = room_id
+    else:
+        language_code = parts[-1]
+        parsed_room_id = int(parts[-2])
+        event_slug = "-".join(parts[:-2])
 
     try:
         async with get_session() as session:
@@ -764,7 +768,11 @@ async def save_transcript_segment(booth_id_str: str, text: str, room_id: int | N
                 stmt = (
                     select(DBBooth.id)
                     .join(Event)
-                    .where(Event.slug == event_slug, DBBooth.language_code == language_code)
+                    .where(
+                        Event.slug == event_slug,
+                        DBBooth.room_id == parsed_room_id,
+                        DBBooth.language_code == language_code
+                    )
                 )
                 booth_id = await session.scalar(stmt)
 

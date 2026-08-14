@@ -1647,7 +1647,6 @@ def test_embed_wrong_event_bola_returns_403():
 
 
 def test_embed_valid_token_unknown_language_returns_404():
-    return
     """Auth passes but the language code has no booth — must return 404, not 403."""
     _seed_embed_event("test-event", "fr")
 
@@ -1665,9 +1664,6 @@ def test_embed_valid_token_booth_offline_returns_200():
     assert res.status_code == 200, res.text
     assert "text/html" in res.headers["content-type"]
 
-
-
-    return
 def test_embed_xss_tojson_escaping():
     """WHEP and caption URLs injected via tojson must not break out of the JS string.
 

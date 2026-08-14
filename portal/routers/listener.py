@@ -250,8 +250,11 @@ async def _embed_listener_impl(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found.")
             audio_delay_ms = room.audio_delay_ms
 
-        booth_id = make_booth_id(ev.slug, resolved_room_id, language_code.lower())
-        channel_id = make_mediamtx_path(ev.slug, resolved_room_id, language_code.lower())
+        try:
+            booth_id = make_booth_id(ev.slug, resolved_room_id, language_code.lower())
+            channel_id = make_mediamtx_path(ev.slug, resolved_room_id, language_code.lower())
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invalid language code.")
 
         if language_code.lower() != "floor":
             db_booths = await list_booths_for_event(session, ev.id)

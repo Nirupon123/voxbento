@@ -30,8 +30,8 @@ async def interpreter_landing_page(request: Request) -> Any:
     if payload is None:
         return safe_redirect(url="/login?next=/interpreter", status_code=status.HTTP_303_SEE_OTHER)
     my_booths = []
-    if "event_slug" in payload and "language_code" in payload:
-        bid = make_booth_id(payload["event_slug"], payload["language_code"])
+    if "event_slug" in payload and "language_code" in payload and "room_id" in payload:
+        bid = make_booth_id(payload["event_slug"], payload["room_id"], payload["language_code"])
         mem_booth = booths.get_booth_sync(bid)
         is_live = mem_booth is not None and mem_booth.ingest_status == "connected"
         async with get_session() as session:
@@ -39,7 +39,11 @@ async def interpreter_landing_page(request: Request) -> Any:
                 select(DBBooth)
                 .options(joinedload(DBBooth.event), joinedload(DBBooth.room))
                 .join(Event)
-                .where(Event.slug == payload["event_slug"], DBBooth.language_code == payload["language_code"])
+                .where(
+                    Event.slug == payload["event_slug"],
+                    DBBooth.room_id == payload["room_id"],
+                    DBBooth.language_code == payload["language_code"],
+                )
             )
             res = await session.execute(stmt)
             b = res.scalar_one_or_none()
@@ -123,6 +127,7 @@ async def interpreter_booth_by_identity(
             .join(Event)
             .options(joinedload(DBBooth.room))
             .where(Event.slug == event_slug)
+            .where(DBBooth.room_id == room_id)
             .where(DBBooth.language_code == language_code)
         )
         db_booth = (await session.scalars(stmt)).first()

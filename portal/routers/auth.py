@@ -66,6 +66,7 @@ async def join_via_invite(token: str) -> RedirectResponse:
         booth_id=tok.booth_id,
         role=tok.role,
         event_slug=tok.booth.event.slug,
+        room_id=tok.booth.room_id,
         language_code=tok.booth.language_code,
     )
 

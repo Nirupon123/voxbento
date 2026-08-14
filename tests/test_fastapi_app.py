@@ -36,6 +36,7 @@ def _interpreter_cookie(event_slug: str = "test-event", language_code: str = "en
         booth_id=1,
         role="interpreter",
         event_slug=event_slug,
+        room_id=1,
         language_code=language_code,
     )
     return {"session_token": tok}
@@ -1630,6 +1631,7 @@ def test_embed_wrong_role_token_returns_403():
         booth_id=1,
         role="interpreter",
         event_slug="test-event",
+        room_id=1,
         language_code="en",
     )
     res = client.get(f"/embed/test-event/en?token={token}")

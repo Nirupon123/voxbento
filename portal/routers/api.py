@@ -338,7 +338,7 @@ async def api_transcription_start(
             select(DBBooth)
             .join(Event)
             .options(selectinload(DBBooth.event))
-            .where(Event.slug == event_slug, DBBooth.language_code == language_code)
+            .where(Event.slug == event_slug, DBBooth.room_id == room_id, DBBooth.language_code == language_code)
         )
         db_booth = await session.scalar(stmt)
         if not db_booth or not db_booth.transcription_enabled:
@@ -362,7 +362,6 @@ async def api_transcription_start(
         if provider_enum != ProviderEnum.LOCAL and (not api_key):
             raise HTTPException(status_code=400, detail=f"{provider} API key missing. Cannot start transcription.")
         config = ProviderConfig(api_key=api_key)
-        room_id = db_booth.room_id
     try:
         await start_transcription_worker(
             event_slug, language_code, booth_id, broadcast_transcription, provider, model_size, config, room_id=room_id

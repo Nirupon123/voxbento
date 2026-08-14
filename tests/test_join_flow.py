@@ -77,6 +77,7 @@ class TestCreateParticipantToken:
             booth_id=1,
             role="interpreter",
             event_slug="pycon2026",
+            room_id=1,
             language_code="en",
         )
         payload = decode_token(token)
@@ -95,6 +96,7 @@ class TestCreateParticipantToken:
             booth_id=1,
             role="room_coordinator",
             event_slug="ev",
+            room_id=1,
             language_code="de",
         )
         payload = decode_token(token)
@@ -105,12 +107,14 @@ class TestCreateParticipantToken:
             booth_id=1,
             role="interpreter",
             event_slug="ev",
+            room_id=1,
             language_code="en",
         )
         t2 = create_participant_token(
             booth_id=1,
             role="interpreter",
             event_slug="ev",
+            room_id=1,
             language_code="en",
         )
         assert decode_token(t1)["sub"] != decode_token(t2)["sub"]
@@ -129,6 +133,7 @@ class TestCreateParticipantToken:
             booth_id=42,
             role=role,
             event_slug="test",
+            room_id=1,
             language_code="zh",
         )
         assert decode_token(token)["role"] == role

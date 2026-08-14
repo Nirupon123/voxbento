@@ -10,6 +10,7 @@ from portal.booth_identity import make_booth_id, make_mediamtx_path
 from portal.config import settings
 from portal.database import (
     create_invite_token,
+    delete_booth,
     get_event_by_slug,
     get_session,
     list_rooms_for_event,
@@ -73,7 +74,22 @@ async def delete_booth_by_language(
 ):
     """Delete a booth from an event."""
     _require_access(request, credentials, token)
-    # Note: booths.delete_booth doesn't exist, updating it to use the new remove_booth
+
+    booth_id = make_booth_id(event_slug, room_id, language_code)
+    await stop_transcription_worker(booth_id)
+
+    # Delete from DB
+    async with get_session() as session:
+        stmt = (
+            select(DBBooth)
+            .join(Event)
+            .where(Event.slug == event_slug, DBBooth.room_id == room_id, DBBooth.language_code == language_code)
+        )
+        db_booth = await session.scalar(stmt)
+        if db_booth:
+            await delete_booth(session, db_booth.id)
+
+    # Remove from in memory state
     await booths.remove_booth(event_slug, room_id, language_code)
 
 

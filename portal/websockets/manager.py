@@ -103,6 +103,10 @@ class TTSConnectionManager:
         if not room:
             self._rooms.pop(key, None)
 
+    def has_listeners(self, room_id: int, language_code: str) -> bool:
+        key = self._get_key(room_id, language_code)
+        return bool(self._rooms.get(key, set()))
+
 
     async def broadcast_bundle(self, room_id: int, language_code: str, audio_bytes: bytes, segment_id: str, seq: int, caption: str = "", translation: str = "", error: str | None = None) -> None:
         key = self._get_key(room_id, language_code)

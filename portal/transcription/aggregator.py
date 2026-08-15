@@ -68,22 +68,26 @@ class CaptionAggregator:
         import re
 
         has_finalized = False
-        while True:
-            # Find the FIRST sentence boundary
-            match = re.search(r"^([^.?!]*[.?!]+)(?:\s+|$)", state.current_utterance)
-            if not match:
-                break
-
-            sentence = match.group(1).strip()
-            split_idx = match.end()
-
-            remainder = state.current_utterance[split_idx:].strip()
-
-            if sentence:
-                await self.handle_final(booth_id, sentence)
-                has_finalized = True
-
-            state.current_utterance = remainder
+        
+        # Find ALL sentence boundaries in the current utterance
+        matches = list(re.finditer(r"([^.?!]*[.?!]+)(?:\s+|$)", state.current_utterance))
+        if matches:
+            split_point = None
+            for match in matches:
+                candidate_text = state.current_utterance[:match.end()].strip()
+                if len(candidate_text.split()) >= 10:
+                    split_point = match.end()
+                    break
+            
+            if split_point is not None:
+                sentence = state.current_utterance[:split_point].strip()
+                remainder = state.current_utterance[split_point:].strip()
+                
+                if sentence:
+                    await self.handle_final(booth_id, sentence)
+                    has_finalized = True
+                
+                state.current_utterance = remainder
 
         state.current_word_count = len(state.current_utterance.split()) if state.current_utterance else 0
         if state.current_utterance:

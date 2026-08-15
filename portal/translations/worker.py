@@ -121,6 +121,10 @@ class TranslationWorker:
                         room.id, lang.language_code, b"", uuid_segment_id, seq, text, text, None
                     ))
                 else:
+                    # Lazy translation: only translate if someone is actually listening!
+                    if not tts_manager.has_listeners(room.id, lang.language_code):
+                        continue
+                        
                     tasks.append(self._translate_and_broadcast(
                         event,
                         room,
@@ -137,8 +141,9 @@ class TranslationWorker:
                         seq
                     ))
 
-            logger.error(f"[{booth_id_str}] Spawning {len(tasks)} translation tasks for {enabled_langs}")
-            await asyncio.gather(*tasks)
+            if tasks:
+                logger.error(f"[{booth_id_str}] Spawning {len(tasks)} translation tasks for active listeners")
+                await asyncio.gather(*tasks)
 
     def _get_translation_api_key(self, event: Event, provider: str) -> str | None:
         return get_translation_api_key(event, provider)
@@ -161,10 +166,10 @@ class TranslationWorker:
     ):
         from portal.websockets.manager import tts_manager
         
-        sem = LANGUAGE_SEMAPHORES.setdefault(lang_code, asyncio.Semaphore(3))
+        sem = LANGUAGE_SEMAPHORES.setdefault(lang_code, asyncio.Semaphore(2))
         q_depth = LANGUAGE_QUEUES.setdefault(lang_code, 0)
         
-        if q_depth >= 5:
+        if q_depth >= 15:
             logger.warning(f"[{booth_id_str}] Queue full for {lang_code}. Dropping segment {seq}.")
             await tts_manager.broadcast_bundle(room.id, lang_code, b"", uuid_segment_id, seq, text, "", "pipeline_failed")
             return
@@ -172,8 +177,19 @@ class TranslationWorker:
         LANGUAGE_QUEUES[lang_code] += 1
         
         try:
+            queue_decremented = False
             async with sem:
-                translated_text = await self._call_llm(provider, model, api_key, text, lang_name, source_lang_name)
+                try:
+                    # Enforce a strict 12-second timeout on LLM inference. If the local CPU is pegged,
+                    # NLLB can take 30+ seconds or deadlock, which permanently fills the queue.
+                    translated_text = await asyncio.wait_for(
+                        self._call_llm(provider, model, api_key, text, lang_name, source_lang_name),
+                        timeout=12.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"[{booth_id_str}] Translation LLM timed out after 12s for {lang_code}.")
+                    translated_text = None
+
                 if not translated_text:
                     await tts_manager.broadcast_bundle(room.id, lang_code, b"", uuid_segment_id, seq, text, "", "pipeline_failed")
                     return
@@ -186,31 +202,39 @@ class TranslationWorker:
                     local_session.add(translation)
                     await local_session.commit()
                 
-                from portal.tts.worker import synthesize
+                # Broadcast Stage 1 (Text Ready) immediately with empty audio
+                await tts_manager.broadcast_bundle(room.id, lang_code, b"", uuid_segment_id, seq, text, translated_text, None)
                 
-                timeout_s = max(2.0, 0.3 * len(translated_text))
-                error = None
-                audio_bytes = b""
+            # Decrement queue early so slow TTS doesn't cause new incoming segments to be dropped
+            LANGUAGE_QUEUES[lang_code] -= 1
+            queue_decremented = True
                 
-                try:
-                    synth_bytes = await asyncio.wait_for(synthesize(room.id, translated_text, lang_code), timeout=timeout_s)
-                    if synth_bytes:
-                        audio_bytes = synth_bytes
-                except asyncio.TimeoutError:
-                    logger.warning(f"[{booth_id_str}] TTS timeout for {lang_code} after {timeout_s}s.")
-                    error = "tts_timeout"
-                except Exception as e:
-                    logger.error(f"[{booth_id_str}] TTS error for {lang_code}: {e}")
-                    error = "tts_error"
+            from portal.tts.worker import synthesize
+            
+            timeout_s = max(2.0, 0.3 * len(translated_text))
+            error = None
+            audio_bytes = b""
+            
+            try:
+                synth_bytes = await asyncio.wait_for(synthesize(room.id, translated_text, lang_code), timeout=timeout_s)
+                if synth_bytes:
+                    audio_bytes = synth_bytes
+            except asyncio.TimeoutError:
+                logger.warning(f"[{booth_id_str}] TTS timeout for {lang_code} after {timeout_s}s.")
+                error = "tts_timeout"
+            except Exception as e:
+                logger.error(f"[{booth_id_str}] TTS error for {lang_code}: {e}")
+                error = "tts_error"
 
-                # Broadcast bundle
-                await tts_manager.broadcast_bundle(room.id, lang_code, audio_bytes, uuid_segment_id, seq, text, translated_text, error)
+            # Broadcast Stage 2 (Audio Ready)
+            await tts_manager.broadcast_bundle(room.id, lang_code, audio_bytes, uuid_segment_id, seq, text, translated_text, error)
 
         except Exception as e:
             logger.error(f"[{booth_id_str}] Translation failed for {lang_code}: {e}")
             await tts_manager.broadcast_bundle(room.id, lang_code, b"", uuid_segment_id, seq, text, "", "pipeline_failed")
         finally:
-            LANGUAGE_QUEUES[lang_code] -= 1
+            if not queue_decremented:
+                LANGUAGE_QUEUES[lang_code] -= 1
 
     async def _call_llm(
         self,
@@ -226,7 +250,7 @@ class TranslationWorker:
             logger.error(f"Translation provider {provider} not supported.")
             return None
 
-        return await provider_instance.translate(
+        translated = await provider_instance.translate(
             provider_name=provider,
             text=text,
             target_lang_name=target_lang_name,
@@ -235,3 +259,6 @@ class TranslationWorker:
             model=model,
             api_key=api_key,
         )
+        if not translated:
+            logger.warning(f"Provider {provider} returned empty translation for text: '{text}'")
+        return translated

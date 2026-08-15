@@ -167,7 +167,7 @@ def get_model_and_tokenizer(model_size: str):
 
         tokenizer = transformers.AutoTokenizer.from_pretrained(local_model_path, src_lang="eng_Latn", revision="main")  # nosec
         cpu_count = os.cpu_count() or 4
-        intra_threads = min(cpu_count, 4)
+        intra_threads = min(cpu_count, 2)
         model = ctranslate2.Translator(
             local_model_path,
             device="cpu",

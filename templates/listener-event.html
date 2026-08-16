@@ -917,6 +917,7 @@
     var canSyncTts = (languageCode === 'floor') && rData && rData.floor_tts_enabled;
     var targetLangValue = translationLangSelect.value;
     var boothObjId = selectedOpt ? selectedOpt.dataset.boothObjId : null;
+    var boothId = selectedOpt ? selectedOpt.dataset.boothId : null;
     var sourceData = boothObjId ? boothsData.find(b => b.id.toString() === boothObjId.toString()) : null;
     var selectedAudioDelayMs = normalizeAudioDelayMs(sourceData ? sourceData.audio_delay_ms : 0);
 
@@ -928,7 +929,7 @@
     var wantsTtsAudio = ttsSyncEnabled && Boolean(targetLangValue) && canSyncTts;
 
     if (wantsTranslationText || wantsTtsAudio) {
-      startTtsWs(roomId, targetLangValue, boothObjId, selectedAudioDelayMs);
+      startTtsWs(roomId, targetLangValue, boothId, selectedAudioDelayMs);
       
       if (wantsTtsAudio) {
         audioEl.muted = true;

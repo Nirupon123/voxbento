@@ -156,7 +156,7 @@ async def broadcast_transcription(booth_id: str, payload: str | dict):
 async def _handle_join(ws: WebSocket, session: Session, data: dict) -> None:
     display_name = data.get("display_name", "Interpreter")
     role = data.get("role", "interpreter")
-    language = data.get("language", "English")
+    language = data.get("language", session.language)
     channel_id = data.get("channel_id", f"{session.booth_id}-audio")
     participant_id = data.get("participant_id")
     if session.granted_role is None:

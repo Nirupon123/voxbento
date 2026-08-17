@@ -104,9 +104,27 @@ class TranscriptionWorkerSession:
                 async with FfmpegProcess(self.rtsp_url, self.sample_rate, self.booth_id) as process:
                     try:
                         actual_language = self.transcription_language or self.language_code
-                        await self.provider.run_stream(
-                            process, actual_language, self.model_size, self.config, self.broadcast_callback, self.booth_id, self.room_id
-                        )
+                        from portal.transcription.providers.base import AudioIngester, StreamingProvider
+                        if isinstance(self.provider, StreamingProvider):
+                            ingester = AudioIngester(process, sample_rate=self.sample_rate)
+                            from portal.transcription.aggregator import CaptionAggregator
+                            aggregator = CaptionAggregator(self.broadcast_callback, room_id=self.room_id)
+                            async def notify_gap(start: float, end: float):
+                                logger.warning(f"[{self.booth_id}] Audio gap: {start:.1f}s - {end:.1f}s")
+                                await self.broadcast_callback(self.booth_id, f"[Audio gap: {end-start:.1f}s skipped to catch up]")
+                            await self.provider.process_stream(
+                                ingester.stream(),
+                                aggregator,
+                                notify_gap,
+                                language_code=actual_language,
+                                model_variant=self.model_size,
+                                config=self.config,
+                                booth_id=self.booth_id
+                            )
+                        else:
+                            await self.provider.run_stream(
+                                process, actual_language, self.model_size, self.config, self.broadcast_callback, self.booth_id, self.room_id
+                            )
                     except asyncio.IncompleteReadError:
                         logger.error(f"[{self.booth_id}][{self.session_id}] ffmpeg stream ended abruptly. Retrying...")
                     except asyncio.CancelledError:

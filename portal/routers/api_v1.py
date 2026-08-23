@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from portal.auth import require_oauth_scope
-from portal.booth_identity import make_booth_id
+from portal.booth_identity import make_booth_id, make_mediamtx_path
 from portal.database import get_db_session
 from portal.globals import booths
 from portal.models import (
@@ -351,7 +351,7 @@ async def upsert_room(
             whip_path = make_mediamtx_path(event.slug, room.id, b.language_code)
             whep_url = f"{settings.mediamtx_whip_base}/{whip_path}/whep"
             returned_booths.append({"language": b.language_code, "whip_path": whip_path, "whep_url": whep_url})
-    except Exception as e:
+    except Exception:
         import traceback
         return {"status": "error", "error": traceback.format_exc()}
 
@@ -380,10 +380,10 @@ async def delete_room(
         raise HTTPException(status_code=404, detail="Room not found")
 
     room_booths = [
-        b for b in await booths.list_booths_for_event(event_slug) 
+        b for b in await booths.list_booths_for_event(event_slug)
         if b["room_id"] == room.id
     ]
-    
+
     has_active_session = any(
         b.get("ingest_status") == "connected"
         for b in room_booths

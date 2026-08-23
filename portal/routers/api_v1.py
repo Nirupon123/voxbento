@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 
+
 async def _verify_token_rbac(db: AsyncSession, token: OAuthToken, event: Event, room_id: int | None = None) -> None:
     """Ensure the OAuth token is valid for this event, AND the underlying user still has RBAC permissions."""
     if token.event_id != event.id:
@@ -38,6 +39,7 @@ async def _verify_token_rbac(db: AsyncSession, token: OAuthToken, event: Event, 
 
     # Check if user is super admin or event owner
     from portal.models import User
+
     user = await db.get(User, token.user_id)
     if user and getattr(user, "is_super_admin", False):
         return
@@ -47,7 +49,7 @@ async def _verify_token_rbac(db: AsyncSession, token: OAuthToken, event: Event, 
         select(EventMembership).where(
             EventMembership.user_id == token.user_id,
             EventMembership.event_id == event.id,
-            EventMembership.role == "event_owner"
+            EventMembership.role == "event_owner",
         )
     )
     if evt_mem.scalars().first():
@@ -59,13 +61,14 @@ async def _verify_token_rbac(db: AsyncSession, token: OAuthToken, event: Event, 
             select(RoomMembership).where(
                 RoomMembership.user_id == token.user_id,
                 RoomMembership.room_id == room_id,
-                RoomMembership.role == "room_coordinator"
+                RoomMembership.role == "room_coordinator",
             )
         )
         if rm_mem.scalars().first():
             return
 
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User lost RBAC access to this resource")
+
 
 @router.get("/events/{event_slug}")
 async def get_event(
@@ -87,6 +90,7 @@ async def get_event(
         "owner_id": event.owner_id,
         "created_at": event.created_at.isoformat(),
     }
+
 
 @router.get("/events/{event_slug}/rooms")
 async def get_rooms(
@@ -110,13 +114,15 @@ async def get_rooms(
             "display_name": r.display_name,
             "is_active": r.is_active,
             "created_at": r.created_at.isoformat(),
-        } for r in rooms
+        }
+        for r in rooms
     ]
 
 
 class EventCreate(BaseModel):
     slug: str
     name: str
+
 
 @router.post("/events/", status_code=status.HTTP_201_CREATED)
 async def create_event(
@@ -130,6 +136,7 @@ async def create_event(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many requests")
 
     from portal.booth_identity import validate_event_slug
+
     try:
         slug = validate_event_slug(payload.slug)
     except ValueError as e:
@@ -161,7 +168,9 @@ async def create_event(
         client_res = await db.execute(select(OAuthClient).where(OAuthClient.id == token.client_id))
         client = client_res.scalars().first()
         if client:
-            dev_acc_res = await db.execute(select(DeveloperAccount).where(DeveloperAccount.id == client.developer_account_id))
+            dev_acc_res = await db.execute(
+                select(DeveloperAccount).where(DeveloperAccount.id == client.developer_account_id)
+            )
             dev_acc = dev_acc_res.scalars().first()
             if dev_acc and dev_acc.user_id != token.user_id:
                 db.add(EventMembership(user_id=dev_acc.user_id, event_id=event.id, role="support"))
@@ -181,6 +190,7 @@ async def create_event(
 
     return {"status": "success", "event_slug": event.slug}
 
+
 @router.delete("/events/{event_slug}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_event(
     event_slug: str,
@@ -195,8 +205,17 @@ async def delete_event(
     await _verify_token_rbac(db, token, event)
 
     active_booths = await booths.list_booths_for_event(event_slug)
-    if active_booths:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot delete event while active booths are running.")
+    has_active_session = any(
+        b.get("ingest_status") == "connected"
+        for b in active_booths
+    )
+    if has_active_session:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Cannot delete event while active booths are running."
+        )
+
+    for b in active_booths:
+        await booths.remove_booth(event_slug, b["room_id"], b["language_code"])
 
     event.deleted_at = datetime.now(timezone.utc)
 
@@ -211,11 +230,13 @@ async def delete_event(
     await db.flush()
     return None
 
+
 class RoomUpsert(BaseModel):
     name: str
     description: str = ""
     enabled: bool = True
     target_languages: list[str] = []
+
 
 @router.put("/events/{event_slug}/rooms/{eventyay_room_id}")
 async def upsert_room(
@@ -225,6 +246,9 @@ async def upsert_room(
     db: AsyncSession = Depends(get_db_session),
     token: OAuthToken = Depends(require_oauth_scope("rooms:write")),
 ):
+    from portal.booth_identity import make_mediamtx_path
+    from portal.globals import booths
+
     result = await db.execute(select(Event).where(Event.slug == event_slug, Event.deleted_at.is_(None)))
     event = result.scalars().first()
     if not event:
@@ -236,7 +260,6 @@ async def upsert_room(
         select(Room).where(Room.event_id == event.id, Room.eventyay_room_id == eventyay_room_id)
     )
     room = room_res.scalars().first()
-
     if room:
         room.display_name = payload.name
         action = "room.updated"
@@ -250,16 +273,62 @@ async def upsert_room(
 
     lang_res = await db.execute(select(RoomTranslationLanguage).where(RoomTranslationLanguage.room_id == room.id))
     existing_langs = {rl.language_code: rl for rl in lang_res.scalars().all()}
+
+    booth_res = await db.execute(select(DBBooth).where(DBBooth.room_id == room.id))
+    existing_booths = {b.language_code: b for b in booth_res.scalars().all()}
+
     requested_langs = set(payload.target_languages)
+
+    # Safe Delete Removed Booths & Languages
+    for code, b in existing_booths.items():
+        if code not in requested_langs:
+            # Active Session Guard — use BoothRegistry.get_booth_sync() (not .items())
+            from portal.booth_identity import make_booth_id
+            booth_id = make_booth_id(event_slug, room.id, code)
+            active_booth = booths.get_booth_sync(booth_id)
+            if active_booth is not None:
+                has_connected = active_booth.ingest_status == "connected"
+                if has_connected:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Cannot remove language '{code}' while it has an active session running.",
+                    )
+            await booths.remove_booth(event_slug, room.id, code)
+            await db.delete(b)
+            db.add(
+                OAuthAuditLog(
+                    token_id=token.id,
+                    client_id=token.client_id,
+                    action="booth.deleted",
+                    request_path=f"/api/v1/events/{event_slug}/rooms/{eventyay_room_id}/booths/{code}",
+                    status_code=status.HTTP_200_OK,
+                )
+            )
 
     for code, rl in existing_langs.items():
         if code not in requested_langs:
             await db.delete(rl)
 
+    # Create Missing Booths & Languages
     for code in requested_langs:
         if code not in existing_langs:
-            db.add(RoomTranslationLanguage(room_id=room.id, language_code=code))
+            db.add(RoomTranslationLanguage(room_id=room.id, language_code=code, language_name=code))
 
+        if code not in existing_booths:
+            new_booth = DBBooth(room_id=room.id, language_code=code, event_id=event.id, language_name=code)
+            db.add(new_booth)
+            existing_booths[code] = new_booth
+            db.add(
+                OAuthAuditLog(
+                    token_id=token.id,
+                    client_id=token.client_id,
+                    action="booth.created",
+                    request_path=f"/api/v1/events/{event_slug}/rooms/{eventyay_room_id}/booths/{code}",
+                    status_code=status.HTTP_201_CREATED,
+                )
+            )
+
+    # Audit Logging
     audit = OAuthAuditLog(
         token_id=token.id,
         client_id=token.client_id,
@@ -268,8 +337,26 @@ async def upsert_room(
         status_code=status_code_ret,
     )
     db.add(audit)
+
     await db.flush()
-    return {"status": "success", "room_id": room.id}
+
+    # Construct Response with Canonical WHEP URLs
+    final_booth_res = await db.execute(select(DBBooth).where(DBBooth.room_id == room.id))
+    final_booths = final_booth_res.scalars().all()
+
+    returned_booths = []
+    from portal.config import settings
+    try:
+        for b in final_booths:
+            whip_path = make_mediamtx_path(event.slug, room.id, b.language_code)
+            whep_url = f"{settings.mediamtx_whip_base}/{whip_path}/whep"
+            returned_booths.append({"language": b.language_code, "whip_path": whip_path, "whep_url": whep_url})
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": traceback.format_exc()}
+
+    return {"status": "success", "room_id": room.id, "booths": returned_booths}
+
 
 @router.delete("/events/{event_slug}/rooms/{eventyay_room_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_room(
@@ -285,14 +372,29 @@ async def delete_room(
 
     await _verify_token_rbac(db, token, event)
 
-    room_res = await db.execute(select(Room).where(Room.event_id == event.id, Room.eventyay_room_id == eventyay_room_id))
+    room_res = await db.execute(
+        select(Room).where(Room.event_id == event.id, Room.eventyay_room_id == eventyay_room_id)
+    )
     room = room_res.scalars().first()
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
 
-    for b_id, b_state in booths.items():
-        if b_state.event_slug == event_slug and b_state.room_id == room.id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot delete room while active booths are running.")
+    room_booths = [
+        b for b in await booths.list_booths_for_event(event_slug) 
+        if b["room_id"] == room.id
+    ]
+    
+    has_active_session = any(
+        b.get("ingest_status") == "connected"
+        for b in room_booths
+    )
+    if has_active_session:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Cannot delete room while active booths are running."
+        )
+
+    for b in room_booths:
+        await booths.remove_booth(event_slug, b["room_id"], b["language_code"])
 
     await db.delete(room)
 
@@ -306,6 +408,7 @@ async def delete_room(
     db.add(audit)
     await db.flush()
     return None
+
 
 @router.patch("/events/{event_slug}/rooms/{room_id}/settings")
 async def patch_room_settings(
@@ -321,6 +424,7 @@ async def patch_room_settings(
 
     await _verify_token_rbac(db, token, event, room_id)
     return {"status": "success"}
+
 
 @router.get("/events/{event_slug}/rooms/{room_id}/booths")
 async def list_booths(
@@ -343,10 +447,12 @@ async def list_booths(
         {
             "id": b.id,
             "language_code": b.language_code,
-            "whip_path": b.whip_path,
+            "whip_path": make_mediamtx_path(event.slug, room_id, b.language_code),
             "created_at": b.created_at.isoformat(),
-        } for b in booths_list
+        }
+        for b in booths_list
     ]
+
 
 @router.get("/events/{event_slug}/rooms/{room_id}/booths/{language_code}")
 async def get_booth(
@@ -363,9 +469,7 @@ async def get_booth(
 
     await _verify_token_rbac(db, token, event, room_id)
 
-    result = await db.execute(
-        select(DBBooth).where(DBBooth.room_id == room_id, DBBooth.language_code == language_code)
-    )
+    result = await db.execute(select(DBBooth).where(DBBooth.room_id == room_id, DBBooth.language_code == language_code))
     booth = result.scalars().first()
     if not booth:
         raise HTTPException(status_code=404, detail="Booth not found")
@@ -373,9 +477,10 @@ async def get_booth(
     return {
         "id": booth.id,
         "language_code": booth.language_code,
-        "whip_path": booth.whip_path,
+        "whip_path": make_mediamtx_path(event.slug, room_id, booth.language_code),
         "created_at": booth.created_at.isoformat(),
     }
+
 
 @router.post("/events/{event_slug}/rooms/{room_id}/booths/{language_code}")
 async def create_booth(
@@ -392,19 +497,19 @@ async def create_booth(
 
     await _verify_token_rbac(db, token, event, room_id)
 
-    result = await db.execute(
-        select(DBBooth).where(DBBooth.room_id == room_id, DBBooth.language_code == language_code)
-    )
+    result = await db.execute(select(DBBooth).where(DBBooth.room_id == room_id, DBBooth.language_code == language_code))
     if result.scalars().first():
         raise HTTPException(status_code=409, detail="Booth already exists")
 
     from portal.booth_identity import make_mediamtx_path
-    whip_path = make_mediamtx_path(event.slug, language_code)
-    booth = DBBooth(room_id=room_id, language_code=language_code, event_id=event.id, whip_path=whip_path)
+
+    booth = DBBooth(room_id=room_id, language_code=language_code, event_id=event.id)
     db.add(booth)
     await db.flush()
 
+    whip_path = make_mediamtx_path(event.slug, room_id, language_code)
     return {"status": "success", "booth_id": booth.id, "whip_path": whip_path}
+
 
 @router.delete("/events/{event_slug}/rooms/{room_id}/booths/{language_code}")
 async def delete_booth_endpoint(
@@ -421,16 +526,16 @@ async def delete_booth_endpoint(
 
     await _verify_token_rbac(db, token, event, room_id)
 
-    result = await db.execute(
-        select(DBBooth).where(DBBooth.room_id == room_id, DBBooth.language_code == language_code)
-    )
+    result = await db.execute(select(DBBooth).where(DBBooth.room_id == room_id, DBBooth.language_code == language_code))
     booth = result.scalars().first()
     if not booth:
         raise HTTPException(status_code=404, detail="Booth not found")
 
     from portal.database import delete_booth
+
     await delete_booth(db, booth.id)
     return {"status": "deleted"}
+
 
 @router.post("/events/{event_slug}/rooms/{room_id}/booths/{language_code}/transcription/start")
 async def start_transcription(
@@ -458,6 +563,7 @@ async def start_transcription(
 
     return {"status": "started", "booth_id": booth_id}
 
+
 @router.post("/events/{event_slug}/rooms/{room_id}/booths/{language_code}/transcription/stop")
 async def stop_transcription(
     event_slug: str,
@@ -476,6 +582,7 @@ async def stop_transcription(
     booth_id = make_booth_id(event_slug, language_code)
     await stop_transcription_worker(booth_id)
     return {"status": "stopped", "booth_id": booth_id}
+
 
 @router.get("/events/{event_slug}/rooms/{room_id}/status")
 async def get_transcription_status(
@@ -501,10 +608,11 @@ async def get_transcription_status(
         booth = booths.get(bid)
         statuses[b.language_code] = {
             "is_active": bool(booth),
-            "transcription_running": bool(booth and getattr(booth, "transcription_task", None))
+            "transcription_running": bool(booth and getattr(booth, "transcription_task", None)),
         }
 
     return {"room_id": room_id, "statuses": statuses}
+
 
 @router.get("/events/{event_slug}/rooms/{room_id}/booths/{language_code}/transcripts/export")
 async def export_transcript(
@@ -523,6 +631,7 @@ async def export_transcript(
 
     return {"status": "success", "content": "Transcription export not fully implemented"}
 
+
 @router.post("/events/{event_slug}/rooms/{room_id}/listener-token")
 async def provision_listener_token(
     event_slug: str,
@@ -538,6 +647,7 @@ async def provision_listener_token(
     await _verify_token_rbac(db, token, event, room_id)
 
     from portal.auth import create_listener_token
+
     t = create_listener_token(event_slug=event.slug)
 
     return {"listener_token": t}

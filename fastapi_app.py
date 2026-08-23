@@ -143,6 +143,8 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     import logging
+    import traceback
+    traceback.print_exc()
 
     logging.exception("Unhandled Server Error:")
     if "text/html" in request.headers.get("accept", ""):

@@ -352,8 +352,8 @@ async def upsert_room(
             whep_url = f"{settings.mediamtx_whip_base}/{whip_path}/whep"
             returned_booths.append({"language": b.language_code, "whip_path": whip_path, "whep_url": whep_url})
     except Exception:
-        import traceback
-        return {"status": "error", "error": traceback.format_exc()}
+        logger.exception("Error generating canonical WHEP URLs")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
     return {"status": "success", "room_id": room.id, "booths": returned_booths}
 

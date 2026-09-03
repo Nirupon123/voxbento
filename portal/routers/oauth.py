@@ -198,15 +198,24 @@ async def authorize_post(
     user: dict = Depends(require_user),
     db: AsyncSession = Depends(get_db_session),
 ):
-    if action == "deny":
-        error_url = f"{redirect_uri}?error=access_denied&state={urllib.parse.quote(state)}"
-        return RedirectResponse(url=error_url, status_code=303)
-
-    # Re-validate client
+    # Re-validate client and redirect URI before any redirect response
     result = await db.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
     client = result.scalars().first()
     if not client or client.status != "active" or redirect_uri not in client.redirect_uris:
         raise HTTPException(status_code=400, detail="Invalid client or redirect URI.")
+
+    # Use the canonical registered redirect URI value for all redirects.
+    validated_redirect_uri = next((uri for uri in client.redirect_uris if uri == redirect_uri), None)
+    if not validated_redirect_uri:
+        raise HTTPException(status_code=400, detail="Invalid client or redirect URI.")
+
+    if action == "deny":
+        parsed_redirect = urllib.parse.urlparse(validated_redirect_uri)
+        existing_query = urllib.parse.parse_qsl(parsed_redirect.query, keep_blank_values=True)
+        existing_query.extend([("error", "access_denied"), ("state", state)])
+        error_query = urllib.parse.urlencode(existing_query)
+        error_url = urllib.parse.urlunparse(parsed_redirect._replace(query=error_query))
+        return RedirectResponse(url=error_url, status_code=303)
 
     # Re-validate scopes live
     effective_scopes = await get_effective_scopes(db, user, event_id, scope.split(" "))
@@ -256,7 +265,11 @@ async def authorize_post(
     )
     await db.flush()
 
-    redirect_url = f"{redirect_uri}?code={code}&state={urllib.parse.quote(state)}"
+    parsed_redirect = urllib.parse.urlparse(validated_redirect_uri)
+    existing_query = urllib.parse.parse_qsl(parsed_redirect.query, keep_blank_values=True)
+    existing_query.extend([("code", code), ("state", state)])
+    redirect_query = urllib.parse.urlencode(existing_query)
+    redirect_url = urllib.parse.urlunparse(parsed_redirect._replace(query=redirect_query))
     return RedirectResponse(url=redirect_url, status_code=303)
 
 

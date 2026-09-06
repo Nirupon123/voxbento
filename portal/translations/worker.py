@@ -116,14 +116,20 @@ class TranslationWorker:
                     # Target == Source: bypass translation/TTS entirely. It was already broadcast instantly
                     # on the base room. We just need to mark it done for anyone who might have connected
                     # specifically to the source-language target websocket.
-                    tasks.append(
-                        tts_manager.broadcast_bundle(
-                            room.id, lang.language_code, booth_id_str, b"", uuid_segment_id, seq, text, text, None
+                    async def _broadcast_source(r_id, l_code, b_id_str, u_seg_id, sq, txt, t_booth_id):
+                        from portal.websockets.manager import listener_manager
+                        await tts_manager.broadcast_bundle(
+                            r_id, l_code, b_id_str, b"", u_seg_id, sq, txt, txt, None
                         )
+                        await listener_manager.broadcast(t_booth_id, {"type": "translated_caption", "status": "final", "text": txt})
+                        
+                    target_booth_id = f"ai_{room.id}_{lang.language_code}"
+                    tasks.append(
+                        _broadcast_source(room.id, lang.language_code, booth_id_str, uuid_segment_id, seq, text, target_booth_id)
                     )
                 else:
                     # Lazy translation: only translate if someone is actually listening!
-                    target_booth_id = f"{event.slug}-{room.id}-{lang.language_code}"
+                    target_booth_id = f"ai_{room.id}_{lang.language_code}"
                     from portal.websockets.manager import listener_manager
                     has_tts = tts_manager.has_listeners(room.id, lang.language_code, booth_id_str)
                     has_text = listener_manager.has_listeners(target_booth_id)

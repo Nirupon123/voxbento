@@ -123,13 +123,13 @@ class TranslationWorker:
                         )
                         await listener_manager.broadcast(t_booth_id, {"type": "translated_caption", "status": "final", "text": txt})
 
-                    target_booth_id = f"ai_{room.id}_{lang.language_code}"
+                    target_booth_id = f"{event.slug}-{room.id}-{lang.language_code}"
                     tasks.append(
                         _broadcast_source(room.id, lang.language_code, booth_id_str, uuid_segment_id, seq, text, target_booth_id)
                     )
                 else:
                     # Lazy translation: only translate if someone is actually listening!
-                    target_booth_id = f"ai_{room.id}_{lang.language_code}"
+                    target_booth_id = f"{event.slug}-{room.id}-{lang.language_code}"
                     from portal.websockets.manager import listener_manager
                     has_tts = tts_manager.has_listeners(room.id, lang.language_code, booth_id_str)
                     has_text = listener_manager.has_listeners(target_booth_id)

@@ -122,7 +122,7 @@ class TranslationWorker:
                             r_id, l_code, b_id_str, b"", u_seg_id, sq, txt, txt, None
                         )
                         await listener_manager.broadcast(t_booth_id, {"type": "translated_caption", "status": "final", "text": txt})
-                        
+
                     target_booth_id = f"ai_{room.id}_{lang.language_code}"
                     tasks.append(
                         _broadcast_source(room.id, lang.language_code, booth_id_str, uuid_segment_id, seq, text, target_booth_id)

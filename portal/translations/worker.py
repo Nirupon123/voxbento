@@ -177,7 +177,7 @@ class TranslationWorker:
         booth_id_str: str,
         uuid_segment_id: str,
         seq: int,
-        target_booth_id: str = None,
+        target_booth_id: str | None = None,
     ):
         from portal.websockets.manager import tts_manager
 
@@ -245,8 +245,9 @@ class TranslationWorker:
                 await tts_manager.broadcast_bundle(
                     room.id, lang_code, booth_id_str, b"", uuid_segment_id, seq, text, translated_text, None
                 )
-                from portal.websockets.manager import listener_manager
-                await listener_manager.broadcast(target_booth_id, {"type": "translated_caption", "status": "final", "text": translated_text})
+                if target_booth_id:
+                    from portal.websockets.manager import listener_manager
+                    await listener_manager.broadcast(target_booth_id, {"type": "translated_caption", "status": "final", "text": translated_text})
 
             # Decrement queue early so slow TTS doesn't cause new incoming segments to be dropped
             LANGUAGE_QUEUES[lang_code] -= 1

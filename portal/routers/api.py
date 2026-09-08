@@ -267,7 +267,7 @@ async def list_event_booths(
             key = None
             if credentials and credentials.scheme.lower() == 'bearer':
                 key = await verify_api_key(session, credentials.credentials)
-            if not key:
+            if not key or (key.event.slug != event_slug and str(key.event_id) != event_slug):
                 raise orig_exc
 
     booth_list = await booths.list_booths_for_event(event_slug)

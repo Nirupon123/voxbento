@@ -61,13 +61,17 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _submitted_code(request: Request, event_slug: str, code: str | None) -> str | None:
+    """The join code this request submits, from the query parameter or the stored cookie."""
+    return code or request.cookies.get(f"listener_code_{event_slug}")
+
+
 def has_listener_access(request: Request, event_slug: str, listener_join_code: str | None, code: str | None) -> bool:
     payload = get_booth_session(request)
     if payload and payload.get("user"):
         return True
 
-    cookie_code = request.cookies.get(f"listener_code_{event_slug}")
-    active_code = code or cookie_code
+    active_code = _submitted_code(request, event_slug, code)
     if bool(listener_join_code and active_code == listener_join_code):
         _reset_attempts(_client_ip(request))
         return True
@@ -83,7 +87,7 @@ async def listen_event_page(request: Request, event_slug: str, code: str | None 
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
         if not has_listener_access(request, event_slug, ev.listener_join_code, code):
-            if _register_failed_attempt(_client_ip(request)):
+            if _submitted_code(request, event_slug, code) and _register_failed_attempt(_client_ip(request)):
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail="Too many join attempts. Please try again later.",
@@ -181,7 +185,7 @@ async def listener_room_audio_delay(
         if not ev:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         if not has_listener_access(request, event_slug, ev.listener_join_code, code):
-            if _register_failed_attempt(_client_ip(request)):
+            if _submitted_code(request, event_slug, code) and _register_failed_attempt(_client_ip(request)):
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail="Too many join attempts. Please try again later.",

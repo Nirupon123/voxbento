@@ -256,7 +256,7 @@ class LocalProvider(TranslationProvider):
             )
             return None
 
-        logger.info(
+        logger.debug(
             f"[NLLB] Language tokens resolved: source_token='{source_lang_token}' target_token='{target_lang_token}'"
         )
         return await asyncio.to_thread(self._run_inference, text, source_lang_token, target_lang_token, model)

@@ -229,7 +229,7 @@ class LocalProvider(TranslationProvider):
         model: str,
         api_key: str | None,
     ) -> str | None:
-        logger.info(
+        logger.debug(
             f"[NLLB] translate called: source='{source_lang_name}' -> target='{target_lang_name}' "
             f"model='{model}' text_len={len(text)}"
         )

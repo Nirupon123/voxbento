@@ -267,7 +267,7 @@ async def list_event_booths(
             key = None
             if credentials and credentials.scheme.lower() == 'bearer':
                 key = await verify_api_key(session, credentials.credentials)
-            if not key or (key.event.slug != event_slug and str(key.event_id) != event_slug):
+            if not key or key.event.slug != event_slug:
                 raise orig_exc
 
     booth_list = await booths.list_booths_for_event(event_slug)
@@ -280,10 +280,6 @@ async def list_event_booths(
         b["label"] = f"{b.get('language_name', b.get('language_code', ''))} (Human)"
 
     async with get_session() as session:
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from portal.models import Event, Room
 
         stmt = select(Event).where(Event.slug == event_slug).options(
             selectinload(Event.rooms).selectinload(Room.translation_languages)

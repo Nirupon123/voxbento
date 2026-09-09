@@ -121,7 +121,8 @@ class TranslationWorker:
                         await tts_manager.broadcast_bundle(
                             r_id, l_code, b_id_str, b"", u_seg_id, sq, txt, txt, None
                         )
-                        await listener_manager.broadcast(t_booth_id, {"type": "translated_caption", "status": "final", "text": txt})
+                        if t_booth_id:
+                            await listener_manager.broadcast(t_booth_id, {"type": "translated_caption", "status": "final", "text": txt})
 
                     target_booth_id = f"{event.slug}-{room.id}-{lang.language_code}"
                     tasks.append(

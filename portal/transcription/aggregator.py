@@ -63,8 +63,6 @@ class CaptionAggregator:
         else:
             state.current_utterance = text.strip()
 
-        state.current_word_count = len(state.current_utterance.split())
-
         import re
 
         has_finalized = False

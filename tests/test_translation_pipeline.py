@@ -42,10 +42,10 @@ async def db_data(setup_db):
         await s.flush()
 
         # Add fr and es languages
-        s.add(RoomTranslationLanguage(room_id=room.id, language_code="fr", language_name="French", enabled=True))
-        s.add(RoomTranslationLanguage(room_id=room.id, language_code="es", language_name="Spanish", enabled=True))
+        s.add(RoomTranslationLanguage(room_id=room.id, language_code="fr", language_name="French", enabled=True, tts_enabled=True))
+        s.add(RoomTranslationLanguage(room_id=room.id, language_code="es", language_name="Spanish", enabled=True, tts_enabled=True))
         # source language (en) as a target to test bypass
-        s.add(RoomTranslationLanguage(room_id=room.id, language_code="en", language_name="English", enabled=True))
+        s.add(RoomTranslationLanguage(room_id=room.id, language_code="en", language_name="English", enabled=True, tts_enabled=True))
 
         segment = TranscriptSegment(room_id=room.id, text="Hello world", language_code="en")
         s.add(segment)
@@ -75,18 +75,19 @@ async def test_language_independence(db_data, mock_broadcast):
     with patch.object(worker, "_call_llm", new=fake_call_llm):
         with patch("portal.tts.worker.synthesize", new=fake_synthesize):
             with patch("portal.websockets.manager.tts_manager.has_listeners", return_value=True):
-                with patch(
-                    "portal.websockets.manager.TTSConnectionManager.broadcast_bundle", new_callable=AsyncMock
-                ) as mock_bundle:
-                    # Start the pipeline
-                    await worker.handle_translation(
-                        room_id=db_data["room"].id,
-                        segment_id=db_data["segment"].id,
-                        text="Hello world",
-                        booth_id_str="floor",
-                        uuid_segment_id="1234-uuid",
-                        seq=1,
-                    )
+                with patch("portal.websockets.manager.listener_manager.has_listeners", return_value=True):
+                    with patch(
+                        "portal.websockets.manager.TTSConnectionManager.broadcast_bundle", new_callable=AsyncMock
+                    ) as mock_bundle:
+                        # Start the pipeline
+                        await worker.handle_translation(
+                            room_id=db_data["room"].id,
+                            segment_id=db_data["segment"].id,
+                            text="Hello world",
+                            booth_id_str="floor",
+                            uuid_segment_id="1234-uuid",
+                            seq=1,
+                        )
 
                 # We expect 5 broadcasts: Spanish (2: text, audio), French (2: text, audio), and English (1 bypass)
                 assert mock_bundle.call_count == 5
@@ -126,19 +127,20 @@ async def test_pipeline_failure_degrades_gracefully(db_data, mock_broadcast):
     with patch.object(worker, "_call_llm", new=fake_call_llm):
         with patch("portal.tts.worker.synthesize", new=fake_synthesize):
             with patch("portal.websockets.manager.tts_manager.has_listeners", return_value=True):
-                with patch(
-                    "portal.websockets.manager.TTSConnectionManager.broadcast_bundle", new_callable=AsyncMock
-                ) as mock_bundle:
-                    # Force dynamic timeout to be very short so it times out instantly
-                    with patch("portal.translations.worker.max", return_value=0.1):
-                        await worker.handle_translation(
-                            room_id=db_data["room"].id,
-                            segment_id=db_data["segment"].id,
-                            text="Hello world",
-                            booth_id_str="floor",
-                            uuid_segment_id="1234-uuid",
-                            seq=1,
-                        )
+                with patch("portal.websockets.manager.listener_manager.has_listeners", return_value=True):
+                    with patch(
+                        "portal.websockets.manager.TTSConnectionManager.broadcast_bundle", new_callable=AsyncMock
+                    ) as mock_bundle:
+                        # Force dynamic timeout to be very short so it times out instantly
+                        with patch("portal.translations.worker.max", return_value=0.1):
+                            await worker.handle_translation(
+                                room_id=db_data["room"].id,
+                                segment_id=db_data["segment"].id,
+                                text="Hello world",
+                                booth_id_str="floor",
+                                uuid_segment_id="1234-uuid",
+                                seq=1,
+                            )
 
                     assert mock_bundle.call_count == 4
 

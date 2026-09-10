@@ -1231,12 +1231,12 @@ def test_ai_booth_precedence():
             event = Event(slug="aitest", display_name="AI Test")
             session.add(event)
             await session.flush()
-            room = Room(event_id=event.id, display_name="AI Room", floor_translation_enabled=True)
+            room = Room(event_id=event.id, display_name="AI Room", floor_translation_enabled=True, floor_tts_enabled=True)
             session.add(room)
             await session.flush()
             # Floor wants fr and de
-            session.add(RoomTranslationLanguage(room_id=room.id, language_code="fr", language_name="French", enabled=True))
-            session.add(RoomTranslationLanguage(room_id=room.id, language_code="de", language_name="German", enabled=True))
+            session.add(RoomTranslationLanguage(room_id=room.id, language_code="fr", language_name="French", enabled=True, tts_enabled=True))
+            session.add(RoomTranslationLanguage(room_id=room.id, language_code="de", language_name="German", enabled=True, tts_enabled=True))
             await session.flush()
             
             # Create a human booth for fr
@@ -1246,7 +1246,7 @@ def test_ai_booth_precedence():
             
             # The human booth wants es
             b_fr.translation_enabled = True
-            session.add(BoothTranslationLanguage(booth_id=b_fr.id, language_code="es", language_name="Spanish", enabled=True))
+            session.add(BoothTranslationLanguage(booth_id=b_fr.id, language_code="es", language_name="Spanish", enabled=True, tts_enabled=True))
             await session.flush()
 
     # Need to run async setup manually in test

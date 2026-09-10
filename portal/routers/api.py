@@ -289,6 +289,8 @@ async def list_event_booths(
             for room in event.rooms:
                 if room.floor_translation_enabled:
                     for tl in room.translation_languages:
+                        if not tl.enabled:
+                            continue
                         ai_stream = {
                             "id": f"ai_{room.id}_{tl.language_code}",
                             "room_id": room.id,

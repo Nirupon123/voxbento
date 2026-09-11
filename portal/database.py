@@ -62,7 +62,7 @@ def _get_engine():
         from portal.config import settings
 
         _engine = create_async_engine(settings.database_url, echo=settings.debug)
-        
+
         if settings.database_url.startswith("sqlite"):
             from sqlalchemy import event
             @event.listens_for(_engine.sync_engine, "connect")
@@ -90,7 +90,7 @@ def configure(url: str, *, echo: bool = False) -> None:
     """
     global _engine, _async_session_factory
     _engine = create_async_engine(url, echo=echo)
-    
+
     if url.startswith("sqlite"):
         from sqlalchemy import event
         @event.listens_for(_engine.sync_engine, "connect")

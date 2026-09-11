@@ -62,6 +62,15 @@ def _get_engine():
         from portal.config import settings
 
         _engine = create_async_engine(settings.database_url, echo=settings.debug)
+        
+        if settings.database_url.startswith("sqlite"):
+            from sqlalchemy import event
+            @event.listens_for(_engine.sync_engine, "connect")
+            def set_sqlite_pragma(dbapi_connection, connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
+
         _async_session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine
 
@@ -81,6 +90,15 @@ def configure(url: str, *, echo: bool = False) -> None:
     """
     global _engine, _async_session_factory
     _engine = create_async_engine(url, echo=echo)
+    
+    if url.startswith("sqlite"):
+        from sqlalchemy import event
+        @event.listens_for(_engine.sync_engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
     _async_session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
 

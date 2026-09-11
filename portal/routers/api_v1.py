@@ -262,9 +262,19 @@ async def upsert_room(
         action = "room.updated"
         status_code_ret = status.HTTP_200_OK
     else:
-        room = Room(event_id=event.id, eventyay_room_id=eventyay_room_id, display_name=payload.name)
-        db.add(room)
-        await db.flush()
+        from sqlalchemy.exc import IntegrityError
+        try:
+            async with db.begin_nested():
+                room = Room(event_id=event.id, eventyay_room_id=eventyay_room_id, display_name=payload.name)
+                db.add(room)
+                await db.flush()
+        except IntegrityError:
+            room_res = await db.execute(select(Room).where(Room.event_id == event.id, Room.eventyay_room_id == eventyay_room_id))
+            room = room_res.scalars().first()
+            if not room:
+                raise HTTPException(status_code=500, detail="Failed to upsert room")
+            room.display_name = payload.name
+            
         action = "room.created"
         status_code_ret = status.HTTP_201_CREATED
 
@@ -644,3 +654,6 @@ async def provision_listener_token(
     t = create_listener_token(event_slug=event.slug)
 
     return {"listener_token": t}
+
+import sys
+

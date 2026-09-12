@@ -178,7 +178,7 @@ async def authorize_get(
                     )
                 )
                 membership = membership_result.scalars().first()
-                
+
                 if membership:
                     membership.role = "event_owner"
                 else:

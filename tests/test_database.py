@@ -157,6 +157,58 @@ async def test_delete_event(db: AsyncSession):
 
 
 @pytest.mark.anyio
+async def test_delete_event_with_a_relay_booth(db: AsyncSession):
+    """rooms.relay_booth_id points at a booth that points back at the room."""
+    # A throwaway event with its own rooms first, so the target event's id cannot
+    # coincide with any of its room ids and hide a filter reading the wrong column.
+    other = await create_event(db, slug="ev-offset", display_name="Offset")
+    for i in range(3):
+        await create_room(db, event_id=other.id, display_name=f"Other {i}")
+    ev = await create_event(db, slug="ev-relay-del", display_name="Ev")
+    rooms = []
+    for code, name in (("en", "English"), ("es", "Spanish"), ("fr", "French")):
+        room = await create_room(db, event_id=ev.id, display_name=f"Room {code}")
+        booth = await create_booth(db, event_id=ev.id, room_id=room.id, language_code=code, language_name=name)
+        room.relay_booth_id = booth.id
+        db.add(InviteToken(booth_id=booth.id, token=generate_token(), role="interpreter"))
+        rooms.append((room, booth))
+    await db.flush()
+    assert all(room.id != ev.id for room, _ in rooms)
+
+    for room, booth in rooms:
+        assert len(await list_booths_for_room(db, room.id)) == 1
+        assert len(await list_tokens_for_booth(db, booth.id)) == 1
+
+    assert await delete_event(db, ev.id) is True
+    assert await get_event_by_id(db, ev.id) is None
+    for room, booth in rooms:
+        assert await get_room_by_id(db, room.id) is None
+        assert await get_booth_by_id(db, booth.id) is None
+        assert await list_booths_for_room(db, room.id) == []
+        assert await list_tokens_for_booth(db, booth.id) == []
+
+
+@pytest.mark.anyio
+async def test_delete_event_with_a_relay_booth_already_loaded(db: AsyncSession):
+    """Clearing only the column would leave the loaded relationship holding the cycle."""
+    from sqlalchemy import select as sa_select
+    from sqlalchemy.orm import joinedload
+
+    ev = await create_event(db, slug="ev-relay-loaded", display_name="Ev")
+    room = await create_room(db, event_id=ev.id, display_name="Room")
+    booth = await create_booth(db, event_id=ev.id, room_id=room.id, language_code="en", language_name="English")
+    room.relay_booth_id = booth.id
+    await db.flush()
+
+    loaded = await db.execute(sa_select(Room).where(Room.id == room.id).options(joinedload(Room.relay_booth)))
+    assert loaded.scalars().first().relay_booth is not None
+
+    assert await delete_event(db, ev.id) is True
+    assert await get_event_by_id(db, ev.id) is None
+    assert await get_room_by_id(db, room.id) is None
+
+
+@pytest.mark.anyio
 async def test_delete_event_not_found(db: AsyncSession):
     assert await delete_event(db, 99999) is False
 

@@ -168,25 +168,6 @@ async def authorize_get(
     )
     has_owner = owner_result.scalars().first() is not None
 
-    if not has_owner:
-        try:
-            async with db.begin_nested():
-                # Update existing membership or create new one as event_owner
-                membership_result = await db.execute(
-                    select(EventMembership).where(
-                        EventMembership.user_id == int(user["sub"]), EventMembership.event_id == evt.id
-                    )
-                )
-                membership = membership_result.scalars().first()
-
-                if membership:
-                    membership.role = "event_owner"
-                else:
-                    membership = EventMembership(user_id=int(user["sub"]), event_id=evt.id, role="event_owner")
-                    db.add(membership)
-                await db.flush()
-        except IntegrityError:
-            pass
     # 3. Calculate Scopes
     requested_scopes = scope.split(" ") if scope else []
     effective_scopes = await get_effective_scopes(db, user, evt.id, requested_scopes, assume_owner=not has_owner)

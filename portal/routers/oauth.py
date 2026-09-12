@@ -159,15 +159,14 @@ async def authorize_get(
             if not evt:
                 raise HTTPException(status_code=500, detail="Failed to create or fetch event.")
 
-        try:
-            async with db.begin_nested():
-                # Give the authorizing user ownership
-                membership = EventMembership(user_id=int(user["sub"]), event_id=evt.id, role="event_owner")
-                db.add(membership)
-                await db.flush()
-        except IntegrityError:
-            pass
-
+    try:
+        async with db.begin_nested():
+            # Give the authorizing user ownership
+            membership = EventMembership(user_id=int(user["sub"]), event_id=evt.id, role="event_owner")
+            db.add(membership)
+            await db.flush()
+    except IntegrityError:
+        pass
     # 3. Calculate Scopes
     requested_scopes = scope.split(" ") if scope else []
     effective_scopes = await get_effective_scopes(db, user, evt.id, requested_scopes)

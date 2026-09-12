@@ -111,6 +111,9 @@ class TranscriptionWorkerSession:
                 async with FfmpegProcess(self.rtsp_url, self.sample_rate, self.booth_id) as process:
                     try:
                         actual_language = self.transcription_language or self.language_code
+                        if actual_language == "floor":
+                            actual_language = ""
+
                         from portal.transcription.providers.base import AudioIngester, StreamingProvider
 
                         if isinstance(self.provider, StreamingProvider):

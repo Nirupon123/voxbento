@@ -262,11 +262,23 @@ async def upsert_room(
         action = "room.updated"
         status_code_ret = status.HTTP_200_OK
     else:
-        room = Room(event_id=event.id, eventyay_room_id=eventyay_room_id, display_name=payload.name)
-        db.add(room)
-        await db.flush()
-        action = "room.created"
-        status_code_ret = status.HTTP_201_CREATED
+        from sqlalchemy.exc import IntegrityError
+        try:
+            async with db.begin_nested():
+                room = Room(event_id=event.id, eventyay_room_id=eventyay_room_id, display_name=payload.name)
+                db.add(room)
+                await db.flush()
+        except IntegrityError:
+            room_res = await db.execute(select(Room).where(Room.event_id == event.id, Room.eventyay_room_id == eventyay_room_id))
+            room = room_res.scalars().first()
+            if not room:
+                raise HTTPException(status_code=500, detail="Failed to upsert room")
+            room.display_name = payload.name
+            action = "room.updated"
+            status_code_ret = status.HTTP_200_OK
+        else:
+            action = "room.created"
+            status_code_ret = status.HTTP_201_CREATED
 
     lang_res = await db.execute(select(RoomTranslationLanguage).where(RoomTranslationLanguage.room_id == room.id))
     existing_langs = {rl.language_code: rl for rl in lang_res.scalars().all()}
@@ -308,23 +320,33 @@ async def upsert_room(
             await db.delete(rl)
 
     # Create Missing Booths & Languages
+    from sqlalchemy.exc import IntegrityError
     for code in requested_langs:
         if code not in existing_langs:
-            db.add(RoomTranslationLanguage(room_id=room.id, language_code=code, language_name=code))
+            try:
+                async with db.begin_nested():
+                    db.add(RoomTranslationLanguage(room_id=room.id, language_code=code, language_name=code))
+                    await db.flush()
+            except IntegrityError:
+                pass
 
         if code not in existing_booths:
-            new_booth = DBBooth(room_id=room.id, language_code=code, event_id=event.id, language_name=code)
-            db.add(new_booth)
-            existing_booths[code] = new_booth
-            db.add(
-                OAuthAuditLog(
-                    token_id=token.id,
-                    client_id=token.client_id,
-                    action="booth.created",
-                    request_path=f"/api/v1/events/{event_slug}/rooms/{eventyay_room_id}/booths/{code}",
-                    status_code=status.HTTP_201_CREATED,
-                )
-            )
+            try:
+                async with db.begin_nested():
+                    new_booth = DBBooth(room_id=room.id, language_code=code, event_id=event.id, language_name=code)
+                    db.add(new_booth)
+                    db.add(
+                        OAuthAuditLog(
+                            token_id=token.id,
+                            client_id=token.client_id,
+                            action="booth.created",
+                            request_path=f"/api/v1/events/{event_slug}/rooms/{eventyay_room_id}/booths/{code}",
+                            status_code=status.HTTP_201_CREATED,
+                        )
+                    )
+                    await db.flush()
+            except IntegrityError:
+                pass
 
     # Audit Logging
     audit = OAuthAuditLog(
@@ -644,3 +666,5 @@ async def provision_listener_token(
     t = create_listener_token(event_slug=event.slug)
 
     return {"listener_token": t}
+
+

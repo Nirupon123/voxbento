@@ -159,14 +159,17 @@ async def authorize_get(
             if not evt:
                 raise HTTPException(status_code=500, detail="Failed to create or fetch event.")
 
-    # Check if the event already has an owner
-    owner_result = await db.execute(
+    # Give the authorizing user ownership if they do not already have it
+    existing_membership_result = await db.execute(
         select(EventMembership).where(
-            EventMembership.event_id == evt.id,
-            EventMembership.role.in_(["event_owner", "super_admin", "owner"])
+            EventMembership.user_id == int(user["sub"]),
+            EventMembership.event_id == evt.id
         )
     )
-    has_owner = owner_result.scalars().first() is not None
+    if not existing_membership_result.scalars().first():
+        membership = EventMembership(user_id=int(user["sub"]), event_id=evt.id, role="event_owner")
+        db.add(membership)
+        await db.flush()
 
     # 3. Calculate Scopes
     requested_scopes = scope.split(" ") if scope else []

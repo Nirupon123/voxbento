@@ -107,7 +107,11 @@ async def process_delivery(client: httpx.AsyncClient, db, delivery: WebhookDeliv
                 sub.is_active = False
                 
                 from portal.models import OAuthClient
-                client_result = await db.execute(select(OAuthClient).where(OAuthClient.developer_account_id == sub.developer_account_id))
+                client_result = await db.execute(
+                    select(OAuthClient)
+                    .where(OAuthClient.developer_account_id == sub.developer_account_id)
+                    .order_by(OAuthClient.id)
+                )
                 dev_client = client_result.scalars().first()
                 
                 audit = OAuthAuditLog(

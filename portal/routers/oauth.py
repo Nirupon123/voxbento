@@ -159,17 +159,24 @@ async def authorize_get(
             if not evt:
                 raise HTTPException(status_code=500, detail="Failed to create or fetch event.")
 
-    # Give the authorizing user ownership if they do not already have it
-    existing_membership_result = await db.execute(
+    # Give the authorizing user ownership if the event has no owner yet
+    owner_result = await db.execute(
         select(EventMembership).where(
-            EventMembership.user_id == int(user["sub"]),
-            EventMembership.event_id == evt.id
+            EventMembership.event_id == evt.id,
+            EventMembership.role.in_(["event_owner", "super_admin", "owner"])
         )
     )
-    if not existing_membership_result.scalars().first():
+    has_owner = owner_result.scalars().first() is not None
+
+    if not has_owner:
         membership = EventMembership(user_id=int(user["sub"]), event_id=evt.id, role="event_owner")
-        db.add(membership)
-        await db.flush()
+        from sqlalchemy.exc import IntegrityError
+        try:
+            async with db.begin_nested():
+                db.add(membership)
+                await db.flush()
+        except IntegrityError:
+            pass  # Membership was created concurrently
 
     # 3. Calculate Scopes
     requested_scopes = scope.split(" ") if scope else []

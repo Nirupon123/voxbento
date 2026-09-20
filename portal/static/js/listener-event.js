@@ -145,7 +145,7 @@ function startTtsWs(roomId, langCode, boothId, audioDelayMs) {
     comfortNoiseLevelDb: -40,
   });
 
-  var wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  var wsProto = (listenerToken || window.location.protocol === "https:") ? "wss:" : "ws:";
   var wsUrl =
     wsProto +
     "//" +
@@ -281,7 +281,7 @@ function startWhepAndCaptions(whepUrl, boothId, audioDelayMs) {
 
 function openCaptionsWs(boothId) {
   if (!boothId) return;
-  var wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  var wsProto = (listenerToken || window.location.protocol === "https:") ? "wss:" : "ws:";
   var wsUrl = wsProto + "//" + window.location.host + "/ws/captions/" + boothId;
   if (listenerToken) {
     wsUrl += "?token=" + encodeURIComponent(listenerToken);

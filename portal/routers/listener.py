@@ -174,6 +174,7 @@ async def listen_event_page(request: Request, event_slug: str, code: str | None 
             "js_version": _JS_CACHE_BUST,
             "listener_token": listener_token,
         },
+        headers={"Cache-Control": "no-store, private"},
     )
     if code and code == ev.listener_join_code:
         response.set_cookie(f"listener_code_{event_slug}", code, httponly=True, max_age=31536000)

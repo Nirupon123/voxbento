@@ -160,6 +160,9 @@ async def listen_event_page(request: Request, event_slug: str, code: str | None 
     if ensure_tasks:
         await asyncio.gather(*ensure_tasks)
 
+    from portal.auth import create_listener_token
+    listener_token = create_listener_token(event_slug=ev.slug)
+
     response = templates.TemplateResponse(
         request=request,
         name="listener-event.html",
@@ -169,6 +172,7 @@ async def listen_event_page(request: Request, event_slug: str, code: str | None 
             "rooms_json": json.dumps(rooms_data),
             "booths_json": json.dumps(booths_data),
             "js_version": _JS_CACHE_BUST,
+            "listener_token": listener_token,
         },
     )
     if code and code == ev.listener_join_code:

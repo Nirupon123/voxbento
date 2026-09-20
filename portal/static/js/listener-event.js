@@ -16,6 +16,7 @@ var eventSlug = eventData.eventSlug;
 var boothsData = eventData.booths;
 
 var roomsData = eventData.rooms;
+var listenerToken = eventData.token;
 
 var roomSelect = document.getElementById("room-select");
 var languageSelect = document.getElementById("language-select");
@@ -155,6 +156,9 @@ function startTtsWs(roomId, langCode, boothId, audioDelayMs) {
     langCode +
     "/" +
     boothId;
+  if (listenerToken) {
+    wsUrl += "?token=" + encodeURIComponent(listenerToken);
+  }
   ttsWs = new WebSocket(wsUrl);
   ttsWs.binaryType = "arraybuffer";
 
@@ -250,7 +254,6 @@ function fetchRoomAudioDelay(roomId) {
     })
     .then(function (data) {
       var delayMs = normalizeAudioDelayMs(data.audio_delay_ms);
-      updateRoomDelayData(roomId, delayMs);
       return delayMs;
     });
 }
@@ -279,9 +282,11 @@ function startWhepAndCaptions(whepUrl, boothId, audioDelayMs) {
 function openCaptionsWs(boothId) {
   if (!boothId) return;
   var wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  captionsWs = new WebSocket(
-    wsProto + "//" + window.location.host + "/ws/captions/" + boothId,
-  );
+  var wsUrl = wsProto + "//" + window.location.host + "/ws/captions/" + boothId;
+  if (listenerToken) {
+    wsUrl += "?token=" + encodeURIComponent(listenerToken);
+  }
+  captionsWs = new WebSocket(wsUrl);
   captionsWs.onmessage = handleCaptionsMessage;
 }
 

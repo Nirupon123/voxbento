@@ -233,6 +233,13 @@ class RoomUpsert(BaseModel):
     description: str = ""
     enabled: bool = True
     target_languages: list[str] = []
+    enable_transcription: bool = False
+    transcription_provider: str | None = None
+    transcription_model: str | None = None
+    source_language: str | None = None
+    enable_translation: bool = False
+    translation_provider: str | None = None
+    translation_model: str | None = None
 
 
 @router.put("/events/{event_slug}/rooms/{eventyay_room_id}")
@@ -259,13 +266,31 @@ async def upsert_room(
     room = room_res.scalars().first()
     if room:
         room.display_name = payload.name
+        room.floor_transcription_enabled = payload.enable_transcription
+        room.floor_transcription_provider = payload.transcription_provider or "local"
+        room.floor_transcription_model = payload.transcription_model or "tiny"
+        room.floor_language_code = payload.source_language
+        room.floor_translation_enabled = payload.enable_translation
+        room.floor_translation_provider = payload.translation_provider
+        room.floor_translation_model = payload.translation_model
         action = "room.updated"
         status_code_ret = status.HTTP_200_OK
     else:
         from sqlalchemy.exc import IntegrityError
         try:
             async with db.begin_nested():
-                room = Room(event_id=event.id, eventyay_room_id=eventyay_room_id, display_name=payload.name)
+                room = Room(
+                    event_id=event.id,
+                    eventyay_room_id=eventyay_room_id,
+                    display_name=payload.name,
+                    floor_transcription_enabled=payload.enable_transcription,
+                    floor_transcription_provider=payload.transcription_provider or "local",
+                    floor_transcription_model=payload.transcription_model or "tiny",
+                    floor_language_code=payload.source_language or None,
+                    floor_translation_enabled=payload.enable_translation,
+                    floor_translation_provider=payload.translation_provider or None,
+                    floor_translation_model=payload.translation_model or None
+                )
                 db.add(room)
                 await db.flush()
         except IntegrityError:
@@ -274,6 +299,13 @@ async def upsert_room(
             if not room:
                 raise HTTPException(status_code=500, detail="Failed to upsert room")
             room.display_name = payload.name
+            room.floor_transcription_enabled = payload.enable_transcription
+            room.floor_transcription_provider = payload.transcription_provider or "local"
+            room.floor_transcription_model = payload.transcription_model or "tiny"
+            room.floor_language_code = payload.source_language or None
+            room.floor_translation_enabled = payload.enable_translation
+            room.floor_translation_provider = payload.translation_provider or None
+            room.floor_translation_model = payload.translation_model or None
             action = "room.updated"
             status_code_ret = status.HTTP_200_OK
         else:
@@ -668,3 +700,59 @@ async def provision_listener_token(
     return {"listener_token": t}
 
 
+
+
+class EventAPIKeysUpdate(BaseModel):
+    openai_api_key: str | None = None
+    deepgram_api_key: str | None = None
+    nvidia_api_key: str | None = None
+    elevenlabs_api_key: str | None = None
+    translation_openai_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    gemini_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    groq_api_key: str | None = None
+
+
+@router.patch("/events/{event_slug}/api_keys", response_model=dict)
+async def update_event_api_keys(
+    event_slug: str,
+    payload: EventAPIKeysUpdate,
+    request: Request,
+    token: OAuthToken = Depends(require_oauth_scope("events:write")),
+    db: AsyncSession = Depends(get_db_session),
+):
+    from portal.crypto import encrypt_val
+    from sqlalchemy import select
+    from portal.models import Event
+
+    stmt = select(Event).where(Event.slug == event_slug)
+    result = await db.execute(stmt)
+    event = result.scalar_one_or_none()
+
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    await _verify_token_rbac(db, token, event)
+
+    if payload.openai_api_key is not None:
+        event.encrypted_openai_api_key = encrypt_val(payload.openai_api_key) if payload.openai_api_key else None
+    if payload.deepgram_api_key is not None:
+        event.encrypted_deepgram_api_key = encrypt_val(payload.deepgram_api_key) if payload.deepgram_api_key else None
+    if payload.nvidia_api_key is not None:
+        event.encrypted_nvidia_api_key = encrypt_val(payload.nvidia_api_key) if payload.nvidia_api_key else None
+    if payload.elevenlabs_api_key is not None:
+        event.encrypted_elevenlabs_api_key = encrypt_val(payload.elevenlabs_api_key) if payload.elevenlabs_api_key else None
+    if payload.translation_openai_api_key is not None:
+        event.encrypted_translation_openai_api_key = encrypt_val(payload.translation_openai_api_key) if payload.translation_openai_api_key else None
+    if payload.openrouter_api_key is not None:
+        event.encrypted_openrouter_api_key = encrypt_val(payload.openrouter_api_key) if payload.openrouter_api_key else None
+    if payload.gemini_api_key is not None:
+        event.encrypted_gemini_api_key = encrypt_val(payload.gemini_api_key) if payload.gemini_api_key else None
+    if payload.anthropic_api_key is not None:
+        event.encrypted_anthropic_api_key = encrypt_val(payload.anthropic_api_key) if payload.anthropic_api_key else None
+    if payload.groq_api_key is not None:
+        event.encrypted_groq_api_key = encrypt_val(payload.groq_api_key) if payload.groq_api_key else None
+
+    await db.commit()
+    return {"status": "ok"}

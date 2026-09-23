@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,7 @@ from portal.models import (
     RoomTranslationLanguage,
 )
 from portal.rate_limit import auth_rate_limiter
+from portal.transcription.constants import ProviderEnum
 from portal.transcription.worker import start_transcription_worker, stop_transcription_worker
 
 logger = logging.getLogger(__name__)
@@ -228,8 +229,7 @@ async def delete_event(
     return None
 
 
-from pydantic import Field, field_validator
-from portal.transcription.constants import ProviderEnum
+
 
 class RoomUpsert(BaseModel):
     name: str | None = None
@@ -293,9 +293,9 @@ async def upsert_room(
         select(Room).where(Room.event_id == event.id, Room.eventyay_room_id == eventyay_room_id)
     )
     room = room_res.scalars().first()
-    
+
     payload_dict = payload.model_dump(exclude_unset=True)
-    
+
     if room:
         _apply_floor_settings(room, payload_dict)
         action = "room.updated"
@@ -304,7 +304,7 @@ async def upsert_room(
         # Require name for creation
         if "name" not in payload_dict or not payload_dict["name"]:
             raise HTTPException(status_code=400, detail="name is required to create a new room")
-            
+
         from sqlalchemy.exc import IntegrityError
         try:
             async with db.begin_nested():
@@ -342,7 +342,7 @@ async def upsert_room(
             if code not in requested_langs:
                 # Active Session Guard — use BoothRegistry.get_booth_sync() (not .items())
                 from portal.booth_identity import make_booth_id
-    
+
                 booth_id = make_booth_id(event_slug, room.id, code)
                 active_booth = booths.get_booth_sync(booth_id)
                 if active_booth is not None:
@@ -363,11 +363,11 @@ async def upsert_room(
                         status_code=status.HTTP_200_OK,
                     )
                 )
-    
+
         for code, rl in existing_langs.items():
             if code not in requested_langs:
                 await db.delete(rl)
-    
+
         # Create Missing Booths & Languages
         from sqlalchemy.exc import IntegrityError
         for code in requested_langs:
@@ -378,7 +378,7 @@ async def upsert_room(
                         await db.flush()
                 except IntegrityError:
                     pass
-    
+
             if code not in existing_booths:
                 try:
                     async with db.begin_nested():

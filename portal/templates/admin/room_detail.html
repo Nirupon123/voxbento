@@ -175,7 +175,7 @@
       <div class="form-group" style="flex: 1;">
         <label for="floor_translation_provider">Translation Provider</label>
         <select id="floor_translation_provider" name="floor_translation_provider" class="input">
-          <option value="none" {% if room.floor_translation_provider == 'none' %}selected{% endif %}>-- None --</option>
+          <option value="none" {% if room.floor_translation_provider == 'none' or not room.floor_translation_provider %}selected{% endif %}>-- None --</option>
           <option value="">Select a Provider...</option>
           <option value="openai" {% if room.floor_translation_provider == 'openai' %}selected{% endif %}>OpenAI</option>
           <option value="openrouter" {% if room.floor_translation_provider == 'openrouter' %}selected{% endif %}>OpenRouter</option>
@@ -188,7 +188,7 @@
       <div class="form-group" style="flex: 1;">
         <label for="floor_translation_model">Translation Model</label>
         <select id="floor_translation_model" name="floor_translation_model" class="input">
-          <option value="none" data-provider="none" {% if room.floor_translation_model == 'none' %}selected{% endif %}>-- None --</option>
+          <option value="none" data-provider="none" {% if room.floor_translation_model == 'none' or not room.floor_translation_model %}selected{% endif %}>-- None --</option>
           <option value="">Select a Provider first...</option>
         </select>
       </div>
@@ -305,7 +305,7 @@
 
     async function loadTranslationModels() {
       const provider = transProviderSelect.value;
-      transModelSelect.innerHTML = '<option value="">Select a Model...</option>';
+      transModelSelect.innerHTML = '<option value="none">-- None --</option>\n<option value="">Select a Model...</option>';
       if (!provider) return;
 
       try {

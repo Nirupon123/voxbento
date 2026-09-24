@@ -255,7 +255,7 @@ class RoomUpsert(BaseModel):
 def _apply_floor_settings(room, payload_dict: dict):
     if "name" in payload_dict and payload_dict["name"] is not None:
         room.display_name = payload_dict["name"]
-    if "enable_transcription" in payload_dict:
+    if "enable_transcription" in payload_dict and payload_dict["enable_transcription"] is not None:
         room.floor_transcription_enabled = payload_dict["enable_transcription"]
     if "transcription_provider" in payload_dict:
         val = payload_dict["transcription_provider"]
@@ -264,7 +264,7 @@ def _apply_floor_settings(room, payload_dict: dict):
         room.floor_transcription_model = payload_dict["transcription_model"] or "tiny"
     if "source_language" in payload_dict:
         room.floor_language_code = payload_dict["source_language"]
-    if "enable_translation" in payload_dict:
+    if "enable_translation" in payload_dict and payload_dict["enable_translation"] is not None:
         room.floor_translation_enabled = payload_dict["enable_translation"]
     if "translation_provider" in payload_dict:
         room.floor_translation_provider = payload_dict["translation_provider"]
@@ -334,7 +334,7 @@ async def upsert_room(
     booth_res = await db.execute(select(DBBooth).where(DBBooth.room_id == room.id))
     existing_booths = {b.language_code: b for b in booth_res.scalars().all()}
 
-    if "target_languages" in payload_dict:
+    if "target_languages" in payload_dict and payload_dict["target_languages"] is not None:
         requested_langs = set(payload_dict["target_languages"])
 
         # Safe Delete Removed Booths & Languages

@@ -913,6 +913,8 @@ async def api_start_floor_transcription(room_id: int):
         room = await get_room_by_id(session, room_id)
         if not room or not room.floor_transcription_enabled:
             raise HTTPException(status_code=400, detail="Floor transcription not enabled or invalid room")
+        if room.floor_transcription_provider == "none":
+            raise HTTPException(status_code=400, detail="Cannot start transcription with 'none' provider")
         event = await get_event_by_id(session, room.event_id)
         if not event:
             raise HTTPException(status_code=400, detail="Event not found")

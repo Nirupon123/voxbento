@@ -305,7 +305,11 @@
 
     async function loadTranslationModels() {
       const provider = transProviderSelect.value;
-      transModelSelect.innerHTML = '<option value="none">-- None --</option>\n<option value="">Select a Model...</option>';
+      if (provider === 'none') {
+        transModelSelect.innerHTML = '<option value="none" data-provider="none">-- None --</option>';
+      } else {
+        transModelSelect.innerHTML = '<option value="">Select a Model...</option>';
+      }
       if (!provider) return;
 
       try {

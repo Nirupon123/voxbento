@@ -333,18 +333,6 @@ async def token_exchange(
             return JSONResponse(status_code=400, content={"error": "invalid_request"})
 
         code_hash = hash_token(code)
-        
-        # Atomically claim the authorization code
-        update_result = await db.execute(
-            update(OAuthAuthorizationCode)
-            .where(
-                OAuthAuthorizationCode.code_hash == code_hash,
-                OAuthAuthorizationCode.used == False,
-            )
-            .values(used=True)
-        )
-        if update_result.rowcount == 0:
-            return JSONResponse(status_code=400, content={"error": "invalid_grant"})
 
         # Fetch the details of the claimed code
         code_result = await db.execute(
@@ -354,6 +342,7 @@ async def token_exchange(
 
         if (
             not auth_code
+            or auth_code.used
             or auth_code.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc)
         ):
             return JSONResponse(status_code=400, content={"error": "invalid_grant"})
@@ -365,6 +354,18 @@ async def token_exchange(
             return JSONResponse(
                 status_code=400, content={"error": "invalid_grant", "error_description": "PKCE verification failed"}
             )
+
+        # Atomically claim the authorization code
+        update_result = await db.execute(
+            update(OAuthAuthorizationCode)
+            .where(
+                OAuthAuthorizationCode.code_hash == code_hash,
+                OAuthAuthorizationCode.used.is_(False),
+            )
+            .values(used=True)
+        )
+        if update_result.rowcount == 0:
+            return JSONResponse(status_code=400, content={"error": "invalid_grant"})
 
         # Issue tokens
         access_token_raw = generate_token()

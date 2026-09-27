@@ -234,10 +234,9 @@ async def authorize_post(
         error_url = urllib.parse.urlunparse(parsed_redirect._replace(query=error_query))
         return RedirectResponse(url=error_url, status_code=303)
 
-    # Ensure event exists and lock it for ownership assignment
-    locked_event_result = await db.execute(select(Event).with_for_update().where(Event.id == event_id))
-    locked_event = locked_event_result.scalars().first()
-    if not locked_event:
+    # Ensure event exists
+    event_result = await db.execute(select(Event).where(Event.id == event_id))
+    if not event_result.scalars().first():
         raise HTTPException(status_code=404, detail="Event not found.")
 
     owner_result = await db.execute(
@@ -246,26 +245,6 @@ async def authorize_post(
         )
     )
     has_owner = owner_result.scalars().first() is not None
-
-    if not has_owner:
-        from sqlalchemy.exc import IntegrityError
-
-        try:
-            async with db.begin_nested():
-                membership_result = await db.execute(
-                    select(EventMembership).where(
-                        EventMembership.user_id == int(user["sub"]), EventMembership.event_id == event_id
-                    )
-                )
-                membership = membership_result.scalars().first()
-                if membership:
-                    membership.role = "event_owner"
-                else:
-                    membership = EventMembership(user_id=int(user["sub"]), event_id=event_id, role="event_owner")
-                    db.add(membership)
-                await db.flush()
-        except IntegrityError:
-            pass
 
     # Re-validate scopes live
     assume_owner = not has_owner or client.is_confidential
@@ -354,14 +333,27 @@ async def token_exchange(
             return JSONResponse(status_code=400, content={"error": "invalid_request"})
 
         code_hash = hash_token(code)
+        
+        # Atomically claim the authorization code
+        update_result = await db.execute(
+            update(OAuthAuthorizationCode)
+            .where(
+                OAuthAuthorizationCode.code_hash == code_hash,
+                OAuthAuthorizationCode.used == False,
+            )
+            .values(used=True)
+        )
+        if update_result.rowcount == 0:
+            return JSONResponse(status_code=400, content={"error": "invalid_grant"})
+
+        # Fetch the details of the claimed code
         code_result = await db.execute(
-            select(OAuthAuthorizationCode).with_for_update().where(OAuthAuthorizationCode.code_hash == code_hash)
+            select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code_hash == code_hash)
         )
         auth_code = code_result.scalars().first()
 
         if (
             not auth_code
-            or auth_code.used
             or auth_code.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc)
         ):
             return JSONResponse(status_code=400, content={"error": "invalid_grant"})
@@ -373,9 +365,6 @@ async def token_exchange(
             return JSONResponse(
                 status_code=400, content={"error": "invalid_grant", "error_description": "PKCE verification failed"}
             )
-
-        # Mark code as used
-        auth_code.used = True
 
         # Issue tokens
         access_token_raw = generate_token()

@@ -40,7 +40,7 @@ async def _verify_token_rbac(db: AsyncSession, token: OAuthToken, event: Event, 
 
     # Confidential clients manage their own RBAC
     client = await db.get(OAuthClient, token.client_id)
-    if client and client.is_confidential:
+    if client and client.is_confidential and client.status == "active":
         return
 
     # Check if user is super admin or event owner

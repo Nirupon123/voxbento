@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api/v1")
 async def _verify_token_rbac(db: AsyncSession, token: OAuthToken, event: Event, room_id: int | None = None) -> None:
     """Ensure the OAuth token is valid for this event, AND the underlying user still has RBAC permissions."""
     if token.event_id != event.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token not authorized for this event")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
     # Confidential clients manage their own RBAC
     client = await db.get(OAuthClient, token.client_id)

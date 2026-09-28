@@ -67,7 +67,7 @@ def verify_pkce(code_verifier: str, code_challenge: str, method: str) -> bool:
 
 
 async def get_effective_scopes(
-    db: AsyncSession, user: dict, event_id: int, requested_scopes: list[str], assume_owner: bool = False
+    db: AsyncSession, user: dict, event_id: int, requested_scopes: list[str], client: OAuthClient
 ) -> list[str]:
     # Check if user has EventMembership
     result = await db.execute(
@@ -79,9 +79,7 @@ async def get_effective_scopes(
     # simplified for now: if they have any role in the event, we grant scopes they requested
     # that map to their role.
     # Accept "owner" as a synonym for "event_owner" (e.g. roles synced from Eventyay)
-    is_event_admin = assume_owner or (
-        event_membership and event_membership.role in ("event_owner", "super_admin", "owner")
-    )
+    is_event_admin = event_membership and event_membership.role in ("event_owner", "super_admin", "owner")
     is_room_coordinator = event_membership and event_membership.role == "room_coordinator"
 
     # In a full implementation, we would narrow this down per-room.
@@ -102,8 +100,8 @@ async def get_effective_scopes(
             "listeners:provision",
         }
 
-    # Intersection
-    return list(set(requested_scopes) & allowed)
+    # Intersection with user's allowed scopes AND the client's registered scopes
+    return list(set(requested_scopes) & allowed & set(client.scopes_requested))
 
 
 @router.get("/oauth/authorize", include_in_schema=False)
@@ -164,18 +162,9 @@ async def authorize_get(
             if not evt:
                 raise HTTPException(status_code=500, detail="Failed to create or fetch event.")
 
-    # Give the authorizing user ownership if the event has no owner yet
-    owner_result = await db.execute(
-        select(EventMembership).where(
-            EventMembership.event_id == evt.id, EventMembership.role.in_(["event_owner", "super_admin", "owner"])
-        )
-    )
-    owner_result.scalars().first() is not None
-
     # 3. Calculate Scopes
     requested_scopes = scope.split(" ") if scope else []
-    assume_owner = client.is_confidential
-    effective_scopes = await get_effective_scopes(db, user, evt.id, requested_scopes, assume_owner=assume_owner)
+    effective_scopes = await get_effective_scopes(db, user, evt.id, requested_scopes, client=client)
 
     if not effective_scopes:
         raise HTTPException(
@@ -239,16 +228,8 @@ async def authorize_post(
     if not event_result.scalars().first():
         raise HTTPException(status_code=404, detail="Event not found.")
 
-    owner_result = await db.execute(
-        select(EventMembership).where(
-            EventMembership.event_id == event_id, EventMembership.role.in_(["event_owner", "super_admin", "owner"])
-        )
-    )
-    owner_result.scalars().first() is not None
-
     # Re-validate scopes live
-    assume_owner = client.is_confidential
-    effective_scopes = await get_effective_scopes(db, user, event_id, scope.split(" "), assume_owner=assume_owner)
+    effective_scopes = await get_effective_scopes(db, user, event_id, scope.split(" "), client=client)
     if not effective_scopes:
         raise HTTPException(status_code=403, detail="Forbidden")
 

@@ -170,11 +170,11 @@ async def authorize_get(
             EventMembership.event_id == evt.id, EventMembership.role.in_(["event_owner", "super_admin", "owner"])
         )
     )
-    has_owner = owner_result.scalars().first() is not None
+    owner_result.scalars().first() is not None
 
     # 3. Calculate Scopes
     requested_scopes = scope.split(" ") if scope else []
-    assume_owner = not has_owner or client.is_confidential
+    assume_owner = client.is_confidential
     effective_scopes = await get_effective_scopes(db, user, evt.id, requested_scopes, assume_owner=assume_owner)
 
     if not effective_scopes:
@@ -244,10 +244,10 @@ async def authorize_post(
             EventMembership.event_id == event_id, EventMembership.role.in_(["event_owner", "super_admin", "owner"])
         )
     )
-    has_owner = owner_result.scalars().first() is not None
+    owner_result.scalars().first() is not None
 
     # Re-validate scopes live
-    assume_owner = not has_owner or client.is_confidential
+    assume_owner = client.is_confidential
     effective_scopes = await get_effective_scopes(db, user, event_id, scope.split(" "), assume_owner=assume_owner)
     if not effective_scopes:
         raise HTTPException(status_code=403, detail="Forbidden")

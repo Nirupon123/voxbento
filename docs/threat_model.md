@@ -13,14 +13,14 @@ This created a vulnerability:
 To mitigate these vulnerabilities, we have shifted from implicit trust to explicit verification:
 
 1. **Confidential vs. Public Clients**:
-   - **Confidential Clients** (e.g., backend servers with a secure `client_secret`) are trusted to assume owner scopes **only if** the event is currently ownerless (e.g., during auto-provisioning).
+   - **Confidential Clients** (e.g., backend servers with a secure `client_secret`) are trusted to assume owner scopes for ownerless events (e.g., during auto-provisioning) and during multi-organizer authorization. The actual user permission verification is deferred to the trusted client.
    - **Public Clients** (e.g., SPAs without a secret) are **never** implicitly trusted to assume owner scopes. They must rely on explicitly granted `EventMembership` roles assigned to the user authorizing the client.
 
 2. **Strict Scope Verification (`get_effective_scopes`)**:
    - During the OAuth authorization flow (`/oauth/authorize`), the system checks the user's `EventMembership` for the specific `event_id` requested.
    - If the user is an `event_owner`, `super_admin`, or `owner`, they can grant all valid scopes.
    - If the user is a `room_coordinator`, they can only grant a subset of scopes (e.g., `rooms:read`, `sessions:manage`).
-   - If the user lacks a membership, the authorization is rejected with a `403 Forbidden`, unless the client is a trusted confidential client provisioning an ownerless event.
+   - If the user lacks a membership, the authorization is rejected with a `403 Forbidden`, unless the client is a trusted confidential client managing an ownerless event or multi-organizer authorization.
 
 3. **Preventing Event Existence Leaks (404/403 Consistency)**:
    - When an API endpoint (e.g., `/api/v1/events/{event_slug}`) is accessed with an OAuth token, the system validates the token's `event_id`.

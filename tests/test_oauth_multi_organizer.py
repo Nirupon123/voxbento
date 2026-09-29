@@ -69,12 +69,16 @@ async def setup_oauth_clients(setup_db):
         session.add(public_client)
         session.add(confidential_client)
 
-        # Add an event
-        event = Event(slug="ownerless-event", display_name="Ownerless Event")
+        # Add an event that has an owner
+        event = Event(slug="owned-event", display_name="Owned Event")
         session.add(event)
+
+        # Add a truly ownerless event
+        ownerless_event = Event(slug="truly-ownerless-event", display_name="Ownerless Event")
+        session.add(ownerless_event)
         await session.flush()
 
-        # Assign user as event owner
+        # Assign user as event owner for the first event
         membership = EventMembership(user_id=user.id, event_id=event.id, role="event_owner")
         session.add(membership)
 
@@ -86,6 +90,7 @@ async def setup_oauth_clients(setup_db):
         "public_client": public_client,
         "confidential_client": confidential_client,
         "event": event,
+        "ownerless_event": ownerless_event,
         "user": user,
         "unrelated_user": unrelated_user,
     }
@@ -151,8 +156,40 @@ class TestOAuthMultiOrganizer:
                 cookies={"user_token": user_token},
             )
 
-        assert response.status_code == 403
+        # Because the client is confidential, it is trusted to handle multi-organizer auth
+        assert response.status_code == 303, f"Expected 303, got {response.status_code}: {response.json()}"
+        assert "code=" in response.headers.get("location", "")
 
+    @pytest.mark.anyio
+    async def test_oauth_confidential_client_trust(self, setup_oauth_clients):
+        """
+        confidential client + ownerless event -> success (trusted auto-provisioning)
+        """
+        client = setup_oauth_clients["confidential_client"]
+        event = setup_oauth_clients["ownerless_event"]
+
+        from portal.auth import create_user_token
+        user_token = create_user_token(user_id=setup_oauth_clients["user"].id, email="test@example.com")
+
+        async with _client() as c:
+            response = await c.post(
+                "/oauth/authorize",
+                data={
+                    "client_id": client.client_id,
+                    "redirect_uri": "http://localhost/callback",
+                    "response_type": "code",
+                    "code_challenge": "challenge",
+                    "code_challenge_method": "S256",
+                    "state": "state123",
+                    "event_id": str(event.id),
+                    "scope": "events:write events:read",
+                    "action": "allow",
+                },
+                cookies={"user_token": user_token},
+            )
+
+        assert response.status_code == 303, f"Expected 303, got {response.status_code}: {response.json()}"
+        assert "code=" in response.headers.get("location", "")
     @pytest.mark.anyio
     async def test_oauth_public_client_rejection(self, setup_oauth_clients):
         """

@@ -85,8 +85,9 @@ async def get_effective_scopes(
     # In a full implementation, we would narrow this down per-room.
     # For MVP, if they are event_owner, they get all they asked for.
     # If they are room_coordinator, they get room/booth level scopes.
+    # Confidential clients are trusted to manage permissions (e.g. for ownerless events or multi-organizer auth)
     allowed = set()
-    if is_event_admin:
+    if is_event_admin or client.is_confidential:
         allowed = set(VALID_SCOPES.keys())
     elif is_room_coordinator:
         allowed = {

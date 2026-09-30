@@ -117,7 +117,7 @@ async def create_oauth_client(
     secret_hash = hashlib.sha256(raw_secret.encode()).hexdigest()
 
     from portal.routers.oauth import VALID_SCOPES
-    
+
     client = OAuthClient(
         developer_account_id=account.id,
         client_id=raw_client_id,

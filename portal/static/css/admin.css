@@ -952,6 +952,14 @@ code { font-family: var(--font-mono); font-size: 0.85em; background: var(--color
 /* ── Copy field ──────────────────────────────────────────────────────────── */
 .copy-field { display: flex; align-items: stretch; gap: 8px; }
 .copy-field input { flex: 1; min-height: 40px; padding: 8px 12px; border: 1px solid var(--color-border-strong); border-radius: 10px; font-family: var(--font-mono); font-size: 0.85rem; background: var(--color-surface-2); color: var(--color-text); }
+.copy-field .btn-copy { height: auto; min-width: 72px; }
+
+/* ── Toasts ───────────────────────────────────────────────────────────────── */
+.toast-container { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 1000; }
+.toast { padding: 10px 16px; border-radius: 10px; font-size: 0.9rem; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); background: var(--color-surface-2); color: var(--color-text); border: 1px solid var(--color-border-strong); animation: toast-in 0.15s ease-out; }
+.toast--success { background: var(--color-primary-subtle); border-color: var(--color-primary-border); color: var(--color-primary-active); }
+.toast--error { background: #fde2e2; border-color: var(--color-danger); color: var(--color-danger); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ── Join code display ───────────────────────────────────────────────────── */
 .join-code { font-family: var(--font-mono); font-size: 1.6rem; font-weight: 700; letter-spacing: 0.35em; color: var(--color-primary-active); background: var(--color-primary-subtle); border: 1px dashed var(--color-primary-border); border-radius: 12px; padding: 12px 20px; display: inline-block; }

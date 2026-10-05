@@ -264,7 +264,9 @@ async def test_revoked_admin_flag_takes_effect_immediately(client, setup_db):
 
     # Create the user as an admin
     user = await _create_user(is_admin=True)
-    token = create_user_token(user_id=user.id, email=user.email)
+    # Token is created while the user is still an admin, carrying is_admin=True in the JWT payload.
+    # This simulates a stale token that remains in the browser after the DB role is revoked.
+    token = create_user_token(user_id=user.id, email=user.email, is_admin=True)
 
     # Immediately revoke admin in the DB (simulating an admin demotion while
     # the user's JWT is still valid)

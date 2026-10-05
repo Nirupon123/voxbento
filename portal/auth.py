@@ -104,8 +104,6 @@ async def resolve_principal(
         try:
             payload = decode_token(user_cookie)
             if payload.get("user"):
-                if payload.get("is_admin"):
-                    return {"user_id": None, "is_global_admin": True}
                 sub = payload.get("sub")
                 if sub:
                     try:
@@ -114,8 +112,10 @@ async def resolve_principal(
                         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=error_detail)
                     from portal.database import get_user_by_id
 
+                    # Always resolve the database record so that admin-flag revocations
+                    # take effect immediately without waiting for the JWT to expire.
                     user = await get_user_by_id(db_session, user_id)
-                    if not user:
+                    if not user or not user.is_active:
                         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=error_detail)
                     return {"user_id": user_id, "is_global_admin": user.is_admin}
         except jwt.InvalidTokenError:

@@ -165,13 +165,13 @@ async def test_super_admin_does_no_extra_query(mock_stop, mock_start, client, se
 
 
 @pytest.mark.anyio
-async def test_super_admin_missing_room_404(client, setup_db):
+async def test_super_admin_missing_room_gets_400(client, setup_db):
+    # A super-admin bypasses the 403 membership check; the endpoint itself raises 400
+    # for a non-existent room because the room lookup fails before bot logic runs.
     user = await _create_user(is_admin=True)
     token = create_user_token(user_id=user.id, email=user.email)
     r = await client.post("/api/rooms/999/floor-transcription/start", cookies={"user_token": token})
-    assert (
-        r.status_code == 400
-    )  # The endpoint itself raises 400 for "Invalid room" or "Floor transcription not enabled"
+    assert r.status_code == 400
 
 
 @pytest.mark.anyio
@@ -251,3 +251,34 @@ async def test_admin_token_without_user(mock_stop, mock_start, client, setup_db)
         mock_http.return_value = mock_client
         r = await client.post(f"/api/rooms/{rm.id}/floor-transcription/start", cookies={"admin_token": token})
         assert r.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_revoked_admin_flag_takes_effect_immediately(client, setup_db):
+    """Regression: a JWT carrying is_admin=True must NOT bypass a DB revocation.
+
+    resolve_principal must always consult the database for is_global_admin;
+    it must never trust the is_admin claim baked into the token alone.
+    """
+    from portal.database import get_session
+
+    # Create the user as an admin
+    user = await _create_user(is_admin=True)
+    token = create_user_token(user_id=user.id, email=user.email)
+
+    # Immediately revoke admin in the DB (simulating an admin demotion while
+    # the user's JWT is still valid)
+    async with get_session() as s:
+        from sqlalchemy import select as sa_select
+
+        from portal.models import User
+        db_user = (await s.execute(sa_select(User).where(User.id == user.id))).scalars().first()
+        db_user.is_admin = False
+        await s.commit()
+
+    # The DB now says is_admin=False; even though the token was created when the
+    # user was an admin, the endpoint must deny global-admin access.
+    ev, rm = await _create_event_room()
+    r = await client.post(f"/api/rooms/{rm.id}/floor-transcription/start", cookies={"user_token": token})
+    # No event_owner membership exists, so 403 is correct here.
+    assert r.status_code == 403, f"Expected 403 after admin revocation, got {r.status_code}"

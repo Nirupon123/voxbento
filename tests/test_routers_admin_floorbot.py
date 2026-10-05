@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 from unittest.mock import MagicMock, patch
 
@@ -63,7 +64,9 @@ async def _set_membership(user_id, event_id=None, room_id=None, role="event_owne
 
 
 @pytest.mark.anyio
-async def test_event_owner_can_start_stop_status(client, setup_db):
+@patch('portal.routers.admin.start_transcription_worker')
+@patch('portal.routers.admin.stop_transcription_worker')
+async def test_event_owner_can_start_stop_status(mock_stop, mock_start, client, setup_db):
     user = await _create_user()
     ev, rm = await _create_event_room()
     await _set_membership(user.id, event_id=ev.id, role="event_owner")
@@ -94,7 +97,9 @@ async def test_event_owner_can_start_stop_status(client, setup_db):
 
 
 @pytest.mark.anyio
-async def test_room_coordinator_can_start_stop(client, setup_db):
+@patch('portal.routers.admin.start_transcription_worker')
+@patch('portal.routers.admin.stop_transcription_worker')
+async def test_room_coordinator_can_start_stop(mock_stop, mock_start, client, setup_db):
     user = await _create_user()
     ev, rm = await _create_event_room()
     await _set_membership(user.id, room_id=rm.id, role="room_coordinator")
@@ -135,7 +140,9 @@ async def test_cross_event_leak_gets_403(client, setup_db):
 
 
 @pytest.mark.anyio
-async def test_super_admin_does_no_extra_query(client, setup_db):
+@patch('portal.routers.admin.start_transcription_worker')
+@patch('portal.routers.admin.stop_transcription_worker')
+async def test_super_admin_does_no_extra_query(mock_stop, mock_start, client, setup_db):
     user = await _create_user(is_admin=True)
     ev, rm = await _create_event_room()
     token = create_user_token(user_id=user.id, email=user.email, is_admin=True)
@@ -226,7 +233,9 @@ async def test_privilege_escalation(client, setup_db):
 
 
 @pytest.mark.anyio
-async def test_admin_token_without_user(client, setup_db):
+@patch('portal.routers.admin.start_transcription_worker')
+@patch('portal.routers.admin.stop_transcription_worker')
+async def test_admin_token_without_user(mock_stop, mock_start, client, setup_db):
     token = create_admin_token()
     ev, rm = await _create_event_room()
     with patch("portal.routers.admin.get_http_client") as mock_http:

@@ -34,7 +34,10 @@ async def _create_user(email="owner@test.com", is_admin=False):
     from portal.database import create_user, get_session
 
     async with get_session() as s:
-        return await create_user(s, email=email, display_name="Test", password_hash=hash_password("pw"))
+        user = await create_user(s, email=email, display_name="Test", password_hash=hash_password("pw"))
+        user.is_admin = is_admin
+        await s.commit()
+        return user
 
 
 async def _create_event_room(slug="ev1"):
@@ -146,7 +149,7 @@ async def test_cross_event_leak_gets_403(client, setup_db):
 async def test_super_admin_does_no_extra_query(mock_stop, mock_start, client, setup_db):
     user = await _create_user(is_admin=True)
     ev, rm = await _create_event_room()
-    token = create_user_token(user_id=user.id, email=user.email, is_admin=True)
+    token = create_user_token(user_id=user.id, email=user.email)
 
     # We will assert that only 2 queries happen in the dependency (fetch user, etc)
     # The short circuit means we shouldn't hit the `RoomMembership` OR query
@@ -164,7 +167,7 @@ async def test_super_admin_does_no_extra_query(mock_stop, mock_start, client, se
 @pytest.mark.anyio
 async def test_super_admin_missing_room_404(client, setup_db):
     user = await _create_user(is_admin=True)
-    token = create_user_token(user_id=user.id, email=user.email, is_admin=True)
+    token = create_user_token(user_id=user.id, email=user.email)
     r = await client.post("/api/rooms/999/floor-transcription/start", cookies={"user_token": token})
     assert (
         r.status_code == 400

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from portal.utils import safe_redirect
+
 import base64
 import hashlib
 import logging
@@ -127,12 +129,12 @@ async def authorize_get(
         login_url = f"/login?next={next_url}"
         if login_hint:
             login_url += f"&email={urllib.parse.quote(login_hint)}"
-        return RedirectResponse(url=login_url, status_code=303)
+        return safe_redirect(url=login_url, status_code=status.HTTP_303_SEE_OTHER)
 
     if login_hint and user.get("email", "").lower() != login_hint.lower().strip():
         # Different user logged in than the one requested by Eventyay — redirect to login as login_hint
         login_url = f"/login?next={next_url}&email={urllib.parse.quote(login_hint)}"
-        resp = RedirectResponse(url=login_url, status_code=303)
+        resp = safe_redirect(url=login_url, status_code=status.HTTP_303_SEE_OTHER)
         resp.delete_cookie("user_token")
         return resp
 

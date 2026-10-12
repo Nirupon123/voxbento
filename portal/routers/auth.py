@@ -320,7 +320,7 @@ async def poll_magic_link(request: Request, poll_id: str = ""):
 
     async with get_session() as session:
         result = await session.execute(
-            select(AuthToken).where(AuthToken.token_type == "magic_link").order_by(AuthToken.id.desc()).limit(20)
+            select(AuthToken).where(AuthToken.token_type == "magic_link").order_by(AuthToken.id.desc()).limit(20)  # nosec B105
         )
         tokens = result.scalars().all()
         matched = None

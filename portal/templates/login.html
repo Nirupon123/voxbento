@@ -199,6 +199,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
 <script>
   (function() {
+      function getSafeRedirectUrl(rawUrl) {
+          if (!rawUrl || typeof rawUrl !== 'string') return '';
+          try {
+              const parsed = new URL(rawUrl, window.location.origin);
+              if (parsed.origin === window.location.origin && (parsed.protocol === 'http:' || parsed.protocol === 'https:')) {
+                  return parsed.pathname + parsed.search + parsed.hash;
+              }
+          } catch (e) {}
+          return '';
+      }
+
       function redirectToNext(customUrl) {
           const nextInput = document.getElementById('next_url');
           let target = customUrl || (nextInput ? nextInput.value : '');
@@ -206,8 +217,9 @@ document.addEventListener("DOMContentLoaded", () => {
               const urlParams = new URLSearchParams(window.location.search);
               target = urlParams.get('next') || '';
           }
-          if (target) {
-              window.location.href = target;
+          const safeTarget = getSafeRedirectUrl(target);
+          if (safeTarget) {
+              window.location.assign(safeTarget);
           } else {
               window.location.reload();
           }

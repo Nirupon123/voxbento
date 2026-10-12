@@ -19,10 +19,20 @@
   }
 
   (function() {
-      let targetUrl = {{ (next_url or "") | tojson }} || (new URLSearchParams(window.location.search)).get('next') || '';
-      if (targetUrl && targetUrl.startsWith('/')) {
-          targetUrl = window.location.origin + targetUrl;
+      function getSafeRedirectUrl(rawUrl) {
+          if (!rawUrl || typeof rawUrl !== 'string') return '';
+          try {
+              const parsed = new URL(rawUrl, window.location.origin);
+              if (parsed.origin === window.location.origin && (parsed.protocol === 'http:' || parsed.protocol === 'https:')) {
+                  return parsed.pathname + parsed.search + parsed.hash;
+              }
+          } catch (e) {}
+          return '';
       }
+
+      const rawTarget = {{ (next_url or "") | tojson }} || (new URLSearchParams(window.location.search)).get('next') || '';
+      const safePath = getSafeRedirectUrl(rawTarget);
+      const targetUrl = safePath ? (window.location.origin + safePath) : '';
 
       if (authChannel && targetUrl) {
           authChannel.postMessage({ type: 'logged_in', url: targetUrl });

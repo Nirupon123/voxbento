@@ -194,12 +194,22 @@ async def verify_email_route(request: Request, token: str, background_tasks: Bac
 
 
 @router.get("/login")
-async def user_login_page(request: Request, next: str = ""):
+async def user_login_page(request: Request, next: str = "", email: str = "", switch: bool = False):
+    if switch:
+        response = templates.TemplateResponse(
+            request=request, name="login.html", context={"next_url": next, "prefill_email": email}
+        )
+        response.delete_cookie("user_token")
+        response.delete_cookie("session_token")
+        response.delete_cookie("admin_token")
+        return response
     current_user = await get_current_user(request)
     if current_user:
         redirect_to = next if next and next.startswith("/") and not next.startswith("//") else "/account"
         return safe_redirect(url=redirect_to, status_code=status.HTTP_303_SEE_OTHER)
-    return templates.TemplateResponse(request=request, name="login.html", context={"next_url": next})
+    return templates.TemplateResponse(
+        request=request, name="login.html", context={"next_url": next, "prefill_email": email}
+    )
 
 
 @router.post("/login")
@@ -261,29 +271,87 @@ async def user_login_submit(request: Request):
     return response
 
 
+@router.get("/api/auth/status")
+async def get_auth_status(request: Request):
+    user = await get_current_user(request)
+    if user:
+        return {"authenticated": True, "email": user.get("email"), "user_id": user.get("sub")}
+    return {"authenticated": False}
+
+
 @router.post("/api/auth/magic-link")
 async def request_magic_link(request: Request):
     data = await request.json()
     email = data.get("email", "").strip().lower()
+    next_url = data.get("next_url", "")
 
     if not check_rate_limit("magic_link", email, max_requests=5, window_seconds=3600):
         raise HTTPException(status_code=429, detail="Too many requests")
 
+    poll_id = ""
     async with get_session() as session:
         user = await get_user_by_email(session, email)
         if user:
             import secrets
+            import hashlib
 
             token_val = secrets.token_hex(32)
+            poll_id = hashlib.sha256(token_val.encode()).hexdigest()
             await create_auth_token(
                 session,
                 jti=token_val,
                 user_id=user.id,
                 token_type="magic_link",  # nosec B105
             )
-            await send_magic_login_email(email, token_val)
+            await send_magic_login_email(email, token_val, next_url)
 
-    return {"status": "ok"}
+    return {"status": "ok", "poll_id": poll_id}
+
+
+@router.get("/api/auth/magic-poll")
+async def poll_magic_link(request: Request, poll_id: str = ""):
+    from fastapi.responses import JSONResponse
+    if not poll_id or len(poll_id) != 64:
+        return {"authenticated": False}
+
+    import hashlib
+    from sqlalchemy import select
+    from portal.models import AuthToken
+
+    async with get_session() as session:
+        result = await session.execute(
+            select(AuthToken).where(AuthToken.token_type == "magic_link").order_by(AuthToken.id.desc()).limit(20)
+        )
+        tokens = result.scalars().all()
+        matched = None
+        for tok in tokens:
+            if hashlib.sha256(tok.jti.encode()).hexdigest() == poll_id:
+                matched = tok
+                break
+
+        if not matched or not matched.used_at:
+            return {"authenticated": False}
+
+        user = await get_user_by_id(session, matched.user_id)
+        if not user or not user.is_active:
+            return {"authenticated": False}
+
+        jwt_token = create_user_token(
+            user_id=user.id, email=user.email, display_name=user.display_name, is_admin=user.is_admin
+        )
+        response = JSONResponse({
+            "authenticated": True,
+            "email": user.email,
+            "user_id": user.id,
+        })
+        response.set_cookie(
+            key="user_token",
+            value=jwt_token,
+            httponly=True,
+            samesite="lax",
+            max_age=settings.jwt_expiry_seconds,
+        )
+        return response
 
 
 @router.get("/auth/magic/{token}")
@@ -303,8 +371,15 @@ async def redeem_magic_link(request: Request, token: str, background_tasks: Back
             jwt_token = create_user_token(
                 user_id=user.id, email=user.email, display_name=user.display_name, is_admin=user.is_admin
             )
-            redirect_to = next if next and next.startswith("/") and not next.startswith("//") else "/account"
-            response = safe_redirect(url=redirect_to, status_code=status.HTTP_303_SEE_OTHER)
+
+            if next and "oauth/authorize" in next:
+                response = templates.TemplateResponse(
+                    request=request, name="magic_success.html", context={"next_url": next}
+                )
+            else:
+                redirect_to = next if next and next.startswith("/") and not next.startswith("//") else "/account"
+                response = safe_redirect(url=redirect_to, status_code=status.HTTP_303_SEE_OTHER)
+
             response.set_cookie(
                 key="user_token",
                 value=jwt_token,
@@ -384,8 +459,9 @@ async def reset_password_submit(request: Request, token: str):
 
 
 @router.get("/logout")
-async def user_logout(request: Request):
-    response = safe_redirect(url="/", status_code=status.HTTP_303_SEE_OTHER)
+async def user_logout(request: Request, next: str = "/"):
+    target = next if next and next.startswith("/") and not next.startswith("//") else "/"
+    response = safe_redirect(url=target, status_code=status.HTTP_303_SEE_OTHER)
     response.delete_cookie("user_token")
     response.delete_cookie("session_token")
     response.delete_cookie("admin_token")

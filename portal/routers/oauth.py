@@ -116,14 +116,25 @@ async def authorize_get(
     code_challenge: str = "",
     code_challenge_method: str = "",
     event: str = "",
+    login_hint: str = "",
     user: dict | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
+    path_query = f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path
+    next_url = urllib.parse.quote(path_query)
+
     if user is None:
-        # User is not logged in, redirect to login with 'next' parameter
-        path_query = f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path
-        next_url = urllib.parse.quote(path_query)
-        return RedirectResponse(url=f"/login?next={next_url}", status_code=303)
+        login_url = f"/login?next={next_url}"
+        if login_hint:
+            login_url += f"&email={urllib.parse.quote(login_hint)}"
+        return RedirectResponse(url=login_url, status_code=303)
+
+    if login_hint and user.get("email", "").lower() != login_hint.lower().strip():
+        # Different user logged in than the one requested by Eventyay — redirect to login as login_hint
+        login_url = f"/login?next={next_url}&email={urllib.parse.quote(login_hint)}"
+        resp = RedirectResponse(url=login_url, status_code=303)
+        resp.delete_cookie("user_token")
+        return resp
 
     if response_type != "code":
         raise HTTPException(status_code=400, detail="Unsupported response_type. Only 'code' is supported.")
@@ -188,6 +199,8 @@ async def authorize_get(
             "code_challenge": code_challenge,
             "code_challenge_method": code_challenge_method,
             "scope_string": " ".join(effective_scopes),
+            "current_user_email": user.get("email", "") if user else "",
+            "switch_url": f"/login?switch=1&next={next_url}" + (f"&email={urllib.parse.quote(login_hint)}" if login_hint else ""),
         },
     )
 
@@ -243,6 +256,15 @@ async def authorize_post(
                 client_id=client.id, user_id=int(user["sub"]), event_id=event_id, scopes=effective_scopes
             )
             db.add(consent)
+            # Ensure the authorizing user is added as event_owner to EventMembership!
+            mem_res = await db.execute(
+                select(EventMembership).where(
+                    EventMembership.user_id == int(user["sub"]),
+                    EventMembership.event_id == event_id,
+                )
+            )
+            if not mem_res.scalars().first():
+                db.add(EventMembership(user_id=int(user["sub"]), event_id=event_id, role="event_owner"))
             await db.flush()
     except IntegrityError:
         # Another request inserted it concurrently. Just update the scopes.

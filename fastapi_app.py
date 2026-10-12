@@ -125,7 +125,17 @@ async def get_open_api_endpoint(request: Request, _=Depends(require_admin)):
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     if "text/html" in request.headers.get("accept", ""):
-        if exc.status_code == 403:
+        if exc.status_code in (401, 403):
+            from portal.auth import get_current_user
+            from portal.utils import safe_redirect
+            from fastapi import status
+            import urllib.parse
+            user = await get_current_user(request)
+            if not user:
+                next_url = request.url.path
+                if request.url.query:
+                    next_url += f"?{request.url.query}"
+                return safe_redirect(f"/login?next={urllib.parse.quote(next_url)}", status_code=status.HTTP_303_SEE_OTHER)
             return templates.TemplateResponse(
                 request, "403.html", {"request": request, "detail": exc.detail}, status_code=403
             )

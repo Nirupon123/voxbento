@@ -128,6 +128,51 @@ async def get_rooms(
 class EventCreate(BaseModel):
     slug: str
     name: str
+    organizer_emails: list[str] = Field(default_factory=list)
+
+
+
+async def _ensure_event_memberships(db: AsyncSession, event_id: int, user_id: int | None, organizer_emails: list[str]) -> None:
+    from portal.models import User, EventMembership
+    
+    if user_id:
+        evt_mem = await db.execute(
+            select(EventMembership).where(
+                EventMembership.user_id == user_id,
+                EventMembership.event_id == event_id,
+                EventMembership.role == "event_owner",
+            )
+        )
+        if not evt_mem.scalars().first():
+            db.add(EventMembership(user_id=user_id, event_id=event_id, role="event_owner"))
+            await db.flush()
+
+    for email_raw in organizer_emails:
+        email = email_raw.strip().lower()
+        if not email or "@" not in email:
+            continue
+        user_res = await db.execute(select(User).where(User.email == email))
+        user_obj = user_res.scalars().first()
+        if not user_obj:
+            user_obj = User(
+                email=email,
+                display_name=email.split("@")[0],
+                is_active=True,
+                email_verified=False,
+            )
+            db.add(user_obj)
+            await db.flush()
+        
+        mem_res = await db.execute(
+            select(EventMembership).where(
+                EventMembership.user_id == user_obj.id,
+                EventMembership.event_id == event_id,
+                EventMembership.role == "event_owner",
+            )
+        )
+        if not mem_res.scalars().first():
+            db.add(EventMembership(user_id=user_obj.id, event_id=event_id, role="event_owner"))
+            await db.flush()
 
 
 @router.post("/events/", status_code=status.HTTP_201_CREATED)
@@ -158,6 +203,7 @@ async def create_event(
                 existing_event.display_name = payload.name
                 db.add(existing_event)
                 await db.flush()
+            await _ensure_event_memberships(db, existing_event.id, token.user_id, payload.organizer_emails)
             return {"id": existing_event.id, "slug": existing_event.slug, "name": existing_event.display_name}
         existing_event.deleted_at = None
         existing_event.display_name = payload.name
@@ -170,6 +216,7 @@ async def create_event(
         await db.flush()
 
         db.add(EventMembership(user_id=token.user_id, event_id=event.id, role="event_owner"))
+        await _ensure_event_memberships(db, event.id, token.user_id, payload.organizer_emails)
 
         client_res = await db.execute(select(OAuthClient).where(OAuthClient.id == token.client_id))
         client = client_res.scalars().first()

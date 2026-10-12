@@ -68,8 +68,12 @@ async def send_verification_email(email_to: str, token: str) -> None:
     )
 
 
-async def send_magic_login_email(email_to: str, token: str) -> None:
+import urllib.parse
+
+async def send_magic_login_email(email_to: str, token: str, next_url: str = "") -> None:
     magic_link = f"{settings.public_base_url}/auth/magic/{token}"
+    if next_url:
+        magic_link += f"?next={urllib.parse.quote(next_url)}"
     await _send_email_async(
         email_to=email_to,
         subject="Sign in to VoxBento",

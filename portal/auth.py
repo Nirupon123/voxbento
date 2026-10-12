@@ -204,6 +204,15 @@ async def require_admin(request: Request) -> None:
 
         user_id = principal["user_id"]
         if not user_id:
+            if "text/html" in request.headers.get("accept", ""):
+                import urllib.parse
+                next_url = request.url.path
+                if request.url.query:
+                    next_url += f"?{request.url.query}"
+                raise HTTPException(
+                    status_code=status.HTTP_303_SEE_OTHER,
+                    headers={"Location": f"/login?next={urllib.parse.quote(next_url)}"},
+                )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
 
         from portal.database import list_memberships_for_user, list_room_memberships_for_user
@@ -262,6 +271,15 @@ async def require_event_owner(request: Request) -> None:
 
         user_id = principal["user_id"]
         if not user_id:
+            if "text/html" in request.headers.get("accept", ""):
+                import urllib.parse
+                next_url = request.url.path
+                if request.url.query:
+                    next_url += f"?{request.url.query}"
+                raise HTTPException(
+                    status_code=status.HTTP_303_SEE_OTHER,
+                    headers={"Location": f"/login?next={urllib.parse.quote(next_url)}"},
+                )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
 
         from portal.database import list_memberships_for_user

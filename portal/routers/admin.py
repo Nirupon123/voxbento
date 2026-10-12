@@ -750,6 +750,34 @@ async def admin_create_room(request: Request, event_id: int):
     )
 
 
+@router.get("/admin/events/by-slug/{event_slug}/rooms/{room_id}/")
+async def admin_redirect_room_by_slug(request: Request, event_slug: str, room_id: int):
+    """Redirect by-slug room URL to canonical workspace room page."""
+    from portal.models import Event, Room
+    from sqlalchemy import select
+    from portal.database import get_session
+    from fastapi import HTTPException
+    
+    async with get_session() as session:
+        event = (await session.execute(select(Event).where(Event.slug == event_slug))).scalars().first()
+        if not event:
+            event = (await session.execute(select(Event).where(Event.display_name == event_slug))).scalars().first()
+        if not event:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        # Look for room by primary key
+        room = (await session.execute(select(Room).where(Room.id == room_id, Room.event_id == event.id))).scalars().first()
+        if not room:
+            # Look for room by eventyay_room_id
+            room = (await session.execute(select(Room).where(Room.eventyay_room_id == str(room_id), Room.event_id == event.id))).scalars().first()
+        
+        target_room_id = room.id if room else room_id
+        return safe_redirect(
+            url=f"/workspace/events/{event.id}/rooms/{target_room_id}/",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+
 @router.get("/admin/events/{event_id}/rooms/{room_id}/", dependencies=[Depends(require_admin)])
 async def admin_room_detail(request: Request, event_id: int, room_id: int):
     admin_flags = await get_admin_flags(request, event_id=event_id, room_id=room_id)

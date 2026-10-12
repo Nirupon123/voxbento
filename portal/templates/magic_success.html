@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Sign In Successful — Voxbento{% endblock %}
+
+{% block content %}
+<div style="max-width: 480px; margin: 80px auto; text-align: center; background: #fff; padding: 40px 20px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05); border: 1px solid #e2e8f0;">
+  <div style="width: 64px; height: 64px; background: #22c55e; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 32px; margin: 0 auto 20px;">✓</div>
+  <h2 style="margin-top: 0; color: #0f172a;">Successfully Signed In</h2>
+  <p style="color: #64748b; font-size: 16px; margin-bottom: 30px;">You are now logged into VoxBento.</p>
+  <p style="color: #0f172a; font-weight: 500; padding: 15px; background: #f8fafc; border-radius: 8px; line-height: 1.6;">
+    Please close this tab and return to your original window to continue authorizing the application. If you are not redirected automatically, <a id="manual-redirect-link" href="{{ next_url or '#' }}" target="voxbento_oauth" style="color: #2563eb; text-decoration: underline; font-weight: 600; cursor: pointer;">click me</a>.
+  </p>
+</div>
+
+<script>
+  let authChannel = null;
+  if (typeof BroadcastChannel !== 'undefined') {
+      authChannel = new BroadcastChannel('voxbento_auth');
+      authChannel.postMessage('logged_in');
+  }
+
+  (function() {
+      let targetUrl = {{ (next_url or "") | tojson }} || (new URLSearchParams(window.location.search)).get('next') || '';
+      if (targetUrl && targetUrl.startsWith('/')) {
+          targetUrl = window.location.origin + targetUrl;
+      }
+
+      if (authChannel && targetUrl) {
+          authChannel.postMessage({ type: 'logged_in', url: targetUrl });
+      }
+
+      function triggerBrowserAlert(msg) {
+          try {
+              delete window.alert;
+              if (typeof window.alert === 'function') {
+                  window.alert(msg);
+                  return;
+              }
+          } catch (e) {}
+
+          try {
+              const iframe = document.createElement('iframe');
+              iframe.style.display = 'none';
+              document.body.appendChild(iframe);
+              if (iframe.contentWindow && iframe.contentWindow.alert) {
+                  iframe.contentWindow.alert(msg);
+                  iframe.remove();
+                  return;
+              }
+              iframe.remove();
+          } catch (e) {}
+
+          alert(msg);
+      }
+
+      function openAuthPopup() {
+          if (!targetUrl) return null;
+          const width = 600;
+          const height = 700;
+          const left = window.screen.width ? Math.round((window.screen.width - width) / 2) : 100;
+          const top = window.screen.height ? Math.round((window.screen.height - height) / 2) : 100;
+          const features = `width=${width},height=${height},top=${top},left=${left},status=yes,toolbar=no,menubar=no,location=yes,resizable=yes,scrollbars=yes`;
+
+          let popup = null;
+          try {
+              popup = window.open(targetUrl, 'voxbento_oauth', features);
+              if (popup) {
+                  popup.focus();
+              }
+          } catch (e) {
+              console.error('Error opening popup:', e);
+          }
+          return popup;
+      }
+
+      if (targetUrl) {
+          const manualLink = document.getElementById('manual-redirect-link');
+          if (manualLink) {
+              manualLink.href = targetUrl;
+              manualLink.addEventListener('click', function(e) {
+                  e.preventDefault();
+                  if (authChannel) {
+                      authChannel.postMessage({ type: 'logged_in', url: targetUrl });
+                      authChannel.postMessage('focus_popup');
+                  }
+                  openAuthPopup();
+                  try { window.close(); } catch (err) {}
+              });
+          }
+
+          setTimeout(function() {
+              triggerBrowserAlert("Redirecting to Eventyay authorization page...");
+              if (authChannel) {
+                  authChannel.postMessage({ type: 'logged_in', url: targetUrl });
+                  authChannel.postMessage('focus_popup');
+              }
+              try { window.blur(); } catch (e) {}
+              try { window.close(); } catch (e) {}
+          }, 100);
+      }
+  })();
+</script>
+{% endblock %}

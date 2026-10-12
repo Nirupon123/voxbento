@@ -43,6 +43,18 @@ templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 
 router = APIRouter()
 
+# In-memory store for magic link polling sessions: poll_id -> {token_id, secret_hash, expires_at, consumed}
+_magic_polls: dict[str, dict] = {}
+
+
+def _cleanup_expired_polls():
+    import time
+
+    now = time.time()
+    expired = [k for k, v in _magic_polls.items() if now - v.get("created_at", 0) > 900]
+    for k in expired:
+        _magic_polls.pop(k, None)
+
 
 @router.post("/api/auth/token", response_model=TokenResponse)
 async def get_token(body: Annotated[TokenRequest | None, Body()] = None) -> TokenResponse:
@@ -197,7 +209,7 @@ async def verify_email_route(request: Request, token: str, background_tasks: Bac
 async def user_login_page(request: Request, next: str = "", email: str = "", switch: bool = False):
     if switch:
         response = templates.TemplateResponse(
-            request=request, name="login.html", context={"next_url": next, "prefill_email": email}
+            request=request, name="login.html", context={"next_url": next, "email": email, "prefill_email": email}
         )
         response.delete_cookie("user_token")
         response.delete_cookie("session_token")
@@ -208,7 +220,7 @@ async def user_login_page(request: Request, next: str = "", email: str = "", swi
         redirect_to = next if next and next.startswith("/") and not next.startswith("//") else "/account"
         return safe_redirect(url=redirect_to, status_code=status.HTTP_303_SEE_OTHER)
     return templates.TemplateResponse(
-        request=request, name="login.html", context={"next_url": next, "prefill_email": email}
+        request=request, name="login.html", context={"next_url": next, "email": email, "prefill_email": email}
     )
 
 
@@ -281,6 +293,13 @@ async def get_auth_status(request: Request):
 
 @router.post("/api/auth/magic-link")
 async def request_magic_link(request: Request):
+    import hashlib
+    import secrets
+    import time
+    from datetime import datetime, timedelta, timezone
+
+    from fastapi.responses import JSONResponse
+
     data = await request.json()
     email = data.get("email", "").strip().lower()
     next_url = data.get("next_url", "")
@@ -288,62 +307,132 @@ async def request_magic_link(request: Request):
     if not check_rate_limit("magic_link", email, max_requests=5, window_seconds=3600):
         raise HTTPException(status_code=429, detail="Too many requests")
 
-    poll_id = ""
+    _cleanup_expired_polls()
+    poll_id = secrets.token_hex(32)
+    poll_secret = secrets.token_hex(32)
+    secret_hash = hashlib.sha256(poll_secret.encode()).hexdigest()
+
     async with get_session() as session:
         user = await get_user_by_email(session, email)
         if user:
-            import secrets
-            import hashlib
-
             token_val = secrets.token_hex(32)
-            poll_id = hashlib.sha256(token_val.encode()).hexdigest()
-            await create_auth_token(
+            auth_tok = await create_auth_token(
                 session,
                 jti=token_val,
                 user_id=user.id,
                 token_type="magic_link",  # nosec B105
             )
-            await send_magic_login_email(email, token_val, next_url)
 
-    return {"status": "ok", "poll_id": poll_id}
+            # Bind poll to requesting browser and token expiry
+            expires_at = (
+                auth_tok.expires_at
+                if hasattr(auth_tok, "expires_at") and auth_tok.expires_at
+                else datetime.now(timezone.utc) + timedelta(minutes=15)
+            )
+            _magic_polls[poll_id] = {
+                "token_jti": token_val,
+                "secret_hash": secret_hash,
+                "user_id": user.id,
+                "expires_at": expires_at,
+                "consumed": False,
+                "created_at": time.time(),
+            }
+            sent = await send_magic_login_email(email, token_val, next_url)
+            if not sent:
+                _magic_polls.pop(poll_id, None)
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to deliver magic link email. Please check email configuration or try again.",
+                )
+
+    resp = JSONResponse({"status": "ok", "poll_id": poll_id})
+    resp.set_cookie(
+        key="poll_verifier",
+        value=f"{poll_id}:{poll_secret}",
+        httponly=True,
+        samesite="lax",
+        max_age=900,
+    )
+    return resp
 
 
 @router.get("/api/auth/magic-poll")
 async def poll_magic_link(request: Request, poll_id: str = ""):
     from fastapi.responses import JSONResponse
+
     if not poll_id or len(poll_id) != 64:
         return {"authenticated": False}
 
+    _cleanup_expired_polls()
+    poll_entry = _magic_polls.get(poll_id)
+    if not poll_entry or poll_entry.get("consumed"):
+        return {"authenticated": False}
+
+    # 1. Bind poll capability to the browser that requested the link via cookie
+    cookie_verifier = request.cookies.get("poll_verifier", "")
+    if not cookie_verifier or ":" not in cookie_verifier:
+        return {"authenticated": False}
+
+    c_poll_id, c_secret = cookie_verifier.split(":", 1)
+    if c_poll_id != poll_id:
+        return {"authenticated": False}
+
     import hashlib
+
+    if hashlib.sha256(c_secret.encode()).hexdigest() != poll_entry.get("secret_hash"):
+        return {"authenticated": False}
+
+    # 2. Reject expired magic-link tokens before issuing a JWT
+    from datetime import datetime, timezone
+
+    now_utc = datetime.now(timezone.utc)
+    exp = poll_entry.get("expires_at")
+    if exp:
+        exp_utc = exp.replace(tzinfo=timezone.utc) if exp.tzinfo is None else exp
+        if exp_utc < now_utc:
+            _magic_polls.pop(poll_id, None)
+            return {"authenticated": False}
+
     from sqlalchemy import select
+
     from portal.models import AuthToken
 
     async with get_session() as session:
-        result = await session.execute(
-            select(AuthToken).where(AuthToken.token_type == "magic_link").order_by(AuthToken.id.desc()).limit(20)  # nosec B105
-        )
-        tokens = result.scalars().all()
-        matched = None
-        for tok in tokens:
-            if hashlib.sha256(tok.jti.encode()).hexdigest() == poll_id:
-                matched = tok
-                break
+        result = await session.execute(select(AuthToken).where(AuthToken.jti == poll_entry["token_jti"]))
+        matched = result.scalars().first()
 
         if not matched or not matched.used_at:
             return {"authenticated": False}
+
+        # Check token expiration on DB record as well
+        if matched.expires_at:
+            matched_exp = (
+                matched.expires_at.replace(tzinfo=timezone.utc)
+                if matched.expires_at.tzinfo is None
+                else matched.expires_at
+            )
+            if matched_exp < now_utc:
+                _magic_polls.pop(poll_id, None)
+                return {"authenticated": False}
 
         user = await get_user_by_id(session, matched.user_id)
         if not user or not user.is_active:
             return {"authenticated": False}
 
+        # 3. Single-use: Mark consumed and remove from active poll registry
+        poll_entry["consumed"] = True
+        _magic_polls.pop(poll_id, None)
+
         jwt_token = create_user_token(
             user_id=user.id, email=user.email, display_name=user.display_name, is_admin=user.is_admin
         )
-        response = JSONResponse({
-            "authenticated": True,
-            "email": user.email,
-            "user_id": user.id,
-        })
+        response = JSONResponse(
+            {
+                "authenticated": True,
+                "email": user.email,
+                "user_id": user.id,
+            }
+        )
         response.set_cookie(
             key="user_token",
             value=jwt_token,
@@ -351,6 +440,8 @@ async def poll_magic_link(request: Request, poll_id: str = ""):
             samesite="lax",
             max_age=settings.jwt_expiry_seconds,
         )
+        # Clear poll_verifier cookie as authentication is complete
+        response.delete_cookie("poll_verifier")
         return response
 
 
@@ -372,12 +463,29 @@ async def redeem_magic_link(request: Request, token: str, background_tasks: Back
                 user_id=user.id, email=user.email, display_name=user.display_name, is_admin=user.is_admin
             )
 
-            if next and "oauth/authorize" in next:
+            from urllib.parse import urlparse
+
+            def _is_local_oauth_path(u: str | None) -> bool:
+                if not u or not isinstance(u, str):
+                    return False
+                try:
+                    parsed = urlparse(u)
+                    if parsed.scheme or parsed.netloc:
+                        return False
+                    return parsed.path.startswith("/oauth/authorize") and not u.startswith("//")
+                except Exception:
+                    return False
+
+            if _is_local_oauth_path(next):
                 response = templates.TemplateResponse(
                     request=request, name="magic_success.html", context={"next_url": next}
                 )
             else:
-                redirect_to = next if next and next.startswith("/") and not next.startswith("//") else "/account"
+                redirect_to = (
+                    next
+                    if next and next.startswith("/") and not next.startswith("//") and not urlparse(next).netloc
+                    else "/account"
+                )
                 response = safe_redirect(url=redirect_to, status_code=status.HTTP_303_SEE_OTHER)
 
             response.set_cookie(

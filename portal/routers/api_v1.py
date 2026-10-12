@@ -130,22 +130,61 @@ class EventCreate(BaseModel):
     name: str
     organizer_emails: list[str] = Field(default_factory=list)
 
+    @field_validator("organizer_emails")
+    @classmethod
+    def validate_organizer_emails(cls, v: list[str]) -> list[str]:
+        cleaned = []
+        for e in v:
+            val = e.strip().lower()
+            if not val:
+                continue
+            if "@" not in val or "." not in val.split("@")[-1] or val.startswith("@") or val.endswith("."):
+                raise ValueError(f"Invalid organizer email address: {e}")
+            cleaned.append(val)
+        return cleaned
 
 
-async def _ensure_event_memberships(db: AsyncSession, event_id: int, user_id: int | None, organizer_emails: list[str]) -> None:
-    from portal.models import User, EventMembership
-    
+async def _ensure_event_memberships(
+    db: AsyncSession, event_id: int, user_id: int | None, organizer_emails: list[str]
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from portal.models import EventMembership, User
+
+    async def _upsert_member(uid: int, role: str = "event_owner") -> None:
+        try:
+            async with db.begin_nested():
+                mem_res = await db.execute(
+                    select(EventMembership).where(
+                        EventMembership.user_id == uid,
+                        EventMembership.event_id == event_id,
+                    )
+                )
+                existing = mem_res.scalars().first()
+                if existing:
+                    if existing.role != role:
+                        existing.role = role
+                else:
+                    db.add(EventMembership(user_id=uid, event_id=event_id, role=role))
+                await db.flush()
+        except IntegrityError:
+            try:
+                async with db.begin_nested():
+                    mem_res = await db.execute(
+                        select(EventMembership).where(
+                            EventMembership.user_id == uid,
+                            EventMembership.event_id == event_id,
+                        )
+                    )
+                    existing = mem_res.scalars().first()
+                    if existing and existing.role != role:
+                        existing.role = role
+                        await db.flush()
+            except IntegrityError:
+                pass
+
     if user_id:
-        evt_mem = await db.execute(
-            select(EventMembership).where(
-                EventMembership.user_id == user_id,
-                EventMembership.event_id == event_id,
-                EventMembership.role == "event_owner",
-            )
-        )
-        if not evt_mem.scalars().first():
-            db.add(EventMembership(user_id=user_id, event_id=event_id, role="event_owner"))
-            await db.flush()
+        await _upsert_member(user_id, "event_owner")
 
     for email_raw in organizer_emails:
         email = email_raw.strip().lower()
@@ -154,25 +193,22 @@ async def _ensure_event_memberships(db: AsyncSession, event_id: int, user_id: in
         user_res = await db.execute(select(User).where(User.email == email))
         user_obj = user_res.scalars().first()
         if not user_obj:
-            user_obj = User(
-                email=email,
-                display_name=email.split("@")[0],
-                is_active=True,
-                email_verified=False,
-            )
-            db.add(user_obj)
-            await db.flush()
-        
-        mem_res = await db.execute(
-            select(EventMembership).where(
-                EventMembership.user_id == user_obj.id,
-                EventMembership.event_id == event_id,
-                EventMembership.role == "event_owner",
-            )
-        )
-        if not mem_res.scalars().first():
-            db.add(EventMembership(user_id=user_obj.id, event_id=event_id, role="event_owner"))
-            await db.flush()
+            try:
+                async with db.begin_nested():
+                    user_obj = User(
+                        email=email,
+                        display_name=email.split("@")[0],
+                        is_active=True,
+                        email_verified=False,
+                    )
+                    db.add(user_obj)
+                    await db.flush()
+            except IntegrityError:
+                user_res = await db.execute(select(User).where(User.email == email))
+                user_obj = user_res.scalars().first()
+
+        if user_obj:
+            await _upsert_member(user_obj.id, "event_owner")
 
 
 @router.post("/events/", status_code=status.HTTP_201_CREATED)
@@ -197,6 +233,47 @@ async def create_event(
     existing_event = result.scalars().first()
 
     if existing_event:
+        # Verify caller is authorized to modify memberships on this existing event
+        is_authorized = False
+        if token.event_id == existing_event.id:
+            is_authorized = True
+        elif token.user_id:
+            user_mem = (
+                (
+                    await db.execute(
+                        select(EventMembership).where(
+                            EventMembership.user_id == token.user_id,
+                            EventMembership.event_id == existing_event.id,
+                            EventMembership.role.in_(("event_owner", "super_admin", "owner")),
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if user_mem:
+                is_authorized = True
+
+        if not is_authorized:
+            # If the event currently has no owner (e.g. stub provisioned during OAuth init), allow setting initial owners
+            existing_owners = (
+                (
+                    await db.execute(
+                        select(EventMembership).where(
+                            EventMembership.event_id == existing_event.id,
+                            EventMembership.role.in_(("event_owner", "super_admin", "owner")),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not existing_owners:
+                is_authorized = True
+
+        if not is_authorized:
+            raise HTTPException(status_code=403, detail="Not authorized to manage memberships for this event.")
+
         if existing_event.deleted_at is None:
             # Update the display name if the event already exists (e.g. from OAuth auto-provisioning)
             if existing_event.display_name != payload.name:
@@ -215,7 +292,6 @@ async def create_event(
         db.add(event)
         await db.flush()
 
-        db.add(EventMembership(user_id=token.user_id, event_id=event.id, role="event_owner"))
         await _ensure_event_memberships(db, event.id, token.user_id, payload.organizer_emails)
 
         client_res = await db.execute(select(OAuthClient).where(OAuthClient.id == token.client_id))

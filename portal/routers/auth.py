@@ -309,8 +309,8 @@ async def request_magic_link(request: Request):
 
     _cleanup_expired_polls()
     poll_id = secrets.token_hex(32)
-    poll_secret = secrets.token_hex(32)
-    secret_hash = hashlib.sha256(poll_secret.encode()).hexdigest()
+    poll_nonce = secrets.token_hex(32)
+    nonce_hash = hashlib.sha256(poll_nonce.encode()).hexdigest()
 
     async with get_session() as session:
         user = await get_user_by_email(session, email)
@@ -331,7 +331,7 @@ async def request_magic_link(request: Request):
             )
             _magic_polls[poll_id] = {
                 "token_jti": token_val,
-                "secret_hash": secret_hash,
+                "nonce_hash": nonce_hash,
                 "user_id": user.id,
                 "expires_at": expires_at,
                 "consumed": False,
@@ -348,7 +348,7 @@ async def request_magic_link(request: Request):
     resp = JSONResponse({"status": "ok", "poll_id": poll_id})
     resp.set_cookie(
         key="poll_verifier",
-        value=f"{poll_id}:{poll_secret}",
+        value=f"{poll_id}:{poll_nonce}",
         httponly=True,
         samesite="lax",
         max_age=900,
@@ -373,13 +373,14 @@ async def poll_magic_link(request: Request, poll_id: str = ""):
     if not cookie_verifier or ":" not in cookie_verifier:
         return {"authenticated": False}
 
-    c_poll_id, c_secret = cookie_verifier.split(":", 1)
+    c_poll_id, c_nonce = cookie_verifier.split(":", 1)
     if c_poll_id != poll_id:
         return {"authenticated": False}
 
     import hashlib
 
-    if hashlib.sha256(c_secret.encode()).hexdigest() != poll_entry.get("secret_hash"):
+    expected_nonce_hash = poll_entry.get("nonce_hash") or poll_entry.get("secret_hash")
+    if hashlib.sha256(c_nonce.encode()).hexdigest() != expected_nonce_hash:
         return {"authenticated": False}
 
     # 2. Reject expired magic-link tokens before issuing a JWT

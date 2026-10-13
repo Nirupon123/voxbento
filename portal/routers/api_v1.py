@@ -255,23 +255,6 @@ async def create_event(
                 is_authorized = True
 
         if not is_authorized:
-            # If the event currently has no owner (e.g. stub provisioned during OAuth init), allow setting initial owners
-            existing_owners = (
-                (
-                    await db.execute(
-                        select(EventMembership).where(
-                            EventMembership.event_id == existing_event.id,
-                            EventMembership.role.in_(("event_owner", "super_admin", "owner")),
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            if not existing_owners:
-                is_authorized = True
-
-        if not is_authorized:
             raise HTTPException(status_code=403, detail="Not authorized to manage memberships for this event.")
 
         if existing_event.deleted_at is None:

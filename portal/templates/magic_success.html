@@ -22,7 +22,8 @@
       function getSafeRedirectUrl(rawUrl) {
           if (!rawUrl || typeof rawUrl !== 'string') return '';
           const trimmed = rawUrl.trim();
-          if (trimmed.startsWith('//') || trimmed.toLowerCase().startsWith('javascript:')) {
+          const lower = trimmed.toLowerCase();
+          if (trimmed.startsWith('//') || lower.startsWith('javascript:') || lower.startsWith('data:') || lower.startsWith('vbscript:')) {
               return '';
           }
           try {

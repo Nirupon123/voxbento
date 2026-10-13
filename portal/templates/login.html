@@ -234,6 +234,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
       window.startMagicPoll = function(pollId) {
           if (!pollId) return;
+
+          if (typeof BroadcastChannel !== 'undefined') {
+              const authChannel = new BroadcastChannel('voxbento_auth');
+              authChannel.onmessage = (e) => {
+                  const isLogin = e.data === 'logged_in' || (e.data && e.data.type === 'logged_in');
+                  if (isLogin) {
+                      const url = e.data && e.data.url ? e.data.url : null;
+                      redirectToNext(url);
+                  }
+              };
+          }
+
           const magicTimer = setInterval(async () => {
               try {
                   const res = await fetch('/api/auth/magic-poll?poll_id=' + encodeURIComponent(pollId));
@@ -247,31 +259,6 @@ document.addEventListener("DOMContentLoaded", () => {
               } catch (err) {}
           }, 1000);
       };
-
-      if (typeof BroadcastChannel !== 'undefined') {
-          const authChannel = new BroadcastChannel('voxbento_auth');
-          authChannel.onmessage = (e) => {
-              const isLogin = e.data === 'logged_in' || (e.data && e.data.type === 'logged_in');
-              if (isLogin) {
-                  const url = e.data && e.data.url ? e.data.url : null;
-                  redirectToNext(url);
-              }
-          };
-      }
-
-      // Also poll /api/auth/status every 1.5s
-      const pollTimer = setInterval(async () => {
-          try {
-              const res = await fetch('/api/auth/status');
-              if (res.ok) {
-                  const data = await res.json();
-                  if (data && data.authenticated) {
-                      clearInterval(pollTimer);
-                      redirectToNext();
-                  }
-              }
-          } catch (err) {}
-      }, 1500);
   })();
 </script>
 

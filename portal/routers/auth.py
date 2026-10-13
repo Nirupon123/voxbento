@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -47,6 +48,15 @@ router = APIRouter()
 _magic_polls: dict[str, dict] = {}
 
 
+logger = logging.getLogger(__name__)
+
+
+def _is_cookie_secure(request: Request) -> bool:
+    if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+        return True
+    return bool(settings.public_base_url.startswith("https://") and not settings.debug)
+
+
 def _cleanup_expired_polls():
     import time
 
@@ -65,7 +75,7 @@ async def get_token(body: Annotated[TokenRequest | None, Body()] = None) -> Toke
 
 
 @router.get("/join/{token}")
-async def join_via_invite(token: str) -> RedirectResponse:
+async def join_via_invite(request: Request, token: str) -> RedirectResponse:
     """Validate an invite token, issue a JWT cookie, and redirect to the booth."""
     async with get_session() as session:
         try:
@@ -94,6 +104,7 @@ async def join_via_invite(token: str) -> RedirectResponse:
         key="session_token",
         value=jwt_token,
         httponly=True,
+        secure=_is_cookie_secure(request),
         samesite="lax",
         max_age=settings.jwt_expiry_seconds,
     )
@@ -199,6 +210,7 @@ async def verify_email_route(request: Request, token: str, background_tasks: Bac
                 key="user_token",
                 value=jwt_token,
                 httponly=True,
+                secure=_is_cookie_secure(request),
                 samesite="lax",
                 max_age=settings.jwt_expiry_seconds,
             )
@@ -209,18 +221,11 @@ async def verify_email_route(request: Request, token: str, background_tasks: Bac
 
 @router.get("/login")
 async def user_login_page(request: Request, next: str = "", email: str = "", switch: bool = False):
-    if switch:
-        response = templates.TemplateResponse(
-            request=request, name="login.html", context={"next_url": next, "email": email, "prefill_email": email}
-        )
-        response.delete_cookie("user_token")
-        response.delete_cookie("session_token")
-        response.delete_cookie("admin_token")
-        return response
-    current_user = await get_current_user(request)
-    if current_user:
-        redirect_to = next if next and next.startswith("/") and not next.startswith("//") else "/account"
-        return safe_redirect(url=redirect_to, status_code=status.HTTP_303_SEE_OTHER)
+    if not switch:
+        current_user = await get_current_user(request)
+        if current_user:
+            redirect_to = next if next and next.startswith("/") and not next.startswith("//") else "/account"
+            return safe_redirect(url=redirect_to, status_code=status.HTTP_303_SEE_OTHER)
     return templates.TemplateResponse(
         request=request, name="login.html", context={"next_url": next, "email": email, "prefill_email": email}
     )
@@ -279,6 +284,7 @@ async def user_login_submit(request: Request):
         key="user_token",
         value=jwt_token,
         httponly=True,
+        secure=_is_cookie_secure(request),
         samesite="lax",
         max_age=settings.jwt_expiry_seconds,
     )
@@ -342,16 +348,14 @@ async def request_magic_link(request: Request):
             sent = await send_magic_login_email(email, token_val, next_url)
             if not sent:
                 _magic_polls.pop(poll_id, None)
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to deliver magic link email. Please check email configuration or try again.",
-                )
+                logger.error("Failed to deliver magic link email to %s", email)
 
     resp = JSONResponse({"status": "ok", "poll_id": poll_id})
     resp.set_cookie(
         key="poll_verifier",
         value=f"{poll_id}:{poll_nonce}",
         httponly=True,
+        secure=_is_cookie_secure(request),
         samesite="lax",
         max_age=900,
     )
@@ -440,6 +444,7 @@ async def poll_magic_link(request: Request, poll_id: str = ""):
             key="user_token",
             value=jwt_token,
             httponly=True,
+            secure=_is_cookie_secure(request),
             samesite="lax",
             max_age=settings.jwt_expiry_seconds,
         )
@@ -495,6 +500,7 @@ async def redeem_magic_link(request: Request, token: str, background_tasks: Back
                 key="user_token",
                 value=jwt_token,
                 httponly=True,
+                secure=_is_cookie_secure(request),
                 samesite="lax",
                 max_age=settings.jwt_expiry_seconds,
             )
@@ -559,6 +565,7 @@ async def reset_password_submit(request: Request, token: str):
                 key="user_token",
                 value=jwt_token,
                 httponly=True,
+                secure=_is_cookie_secure(request),
                 samesite="lax",
                 max_age=settings.jwt_expiry_seconds,
             )

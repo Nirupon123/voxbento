@@ -137,6 +137,8 @@ async def register_submit(request: Request):
         errors.append("Display name is required.")
     if password_raw and not password:
         errors.append("Password cannot be blank or only whitespace.")
+    elif password_raw and len(password_raw) < 8:
+        errors.append("Password must be at least 8 characters.")
     elif password_raw and password_raw != password_confirm:
         errors.append("Passwords do not match.")
 
@@ -633,7 +635,11 @@ async def account_page(request: Request):
             if m.booth and m.booth.event and m.booth.room
             else "—"
         )
-        link_str = f"/interpreter/{m.booth.event.slug}/{m.booth.language_code}" if m.booth and m.booth.event else "#"
+        link_str = (
+            f"/interpreter/{m.booth.event.slug}/{m.booth.room_id}/{m.booth.language_code}"
+            if m.booth and m.booth.event
+            else "#"
+        )
         unified_memberships.append(
             {"context": context_str, "link": link_str, "type": "Booth", "role": m.role, "created_at": m.created_at}
         )

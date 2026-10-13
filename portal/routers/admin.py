@@ -336,21 +336,34 @@ async def admin_dashboard(request: Request, page: int = 1):
 
 
 @router.get("/admin/events/", dependencies=[Depends(require_admin)])
-async def admin_event_list(request: Request, page: int = 1):
+async def admin_event_list(request: Request, page: int = 1, search: str | None = None):
+    requested_page = page
+    search = (search or "").strip() or None
     admin_flags = await get_admin_flags(request)
     user = await get_current_user(request)
     user_id = int(user["sub"]) if user and user.get("sub") else None
     allowed_event_ids = await _management_event_ids(request, user_id)
     limit = 20
-    offset = (page - 1) * limit
     async with get_session() as session:
-        total_events = await count_events(session, allowed_event_ids=allowed_event_ids)
-        events = await list_events(session, limit=limit, offset=offset, allowed_event_ids=allowed_event_ids)
-    total_pages = max(1, math.ceil(total_events / limit))
+        total_events = await count_events(session, allowed_event_ids=allowed_event_ids, search=search)
+        total_pages = max(1, math.ceil(total_events / limit))
+        page = min(max(page, 1), total_pages)
+        offset = (page - 1) * limit
+        events = await list_events(
+            session, limit=limit, offset=offset, allowed_event_ids=allowed_event_ids, search=search
+        )
     return templates.TemplateResponse(
         request=request,
         name="admin/event_list.html",
-        context={"events": events, "page": page, "total_pages": total_pages, **admin_flags},
+        context={
+            "events": events,
+            "page": page,
+            "requested_page": requested_page,
+            "total_pages": total_pages,
+            "total_events": total_events,
+            "search": search,
+            **admin_flags,
+        },
     )
 
 
@@ -1029,7 +1042,10 @@ async def api_start_floor_transcription(room_id: int):
         if not room or not room.floor_transcription_enabled:
             raise HTTPException(status_code=400, detail="Floor transcription not enabled or invalid room")
         if room.floor_source == "program_ingest":
-            raise HTTPException(status_code=409, detail="Program ingest owns the floor; transcription starts automatically when audio arrives")
+            raise HTTPException(
+                status_code=409,
+                detail="Program ingest owns the floor; transcription starts automatically when audio arrives",
+            )
         if room.floor_transcription_provider == "none":
             raise HTTPException(status_code=400, detail="Cannot start transcription with 'none' provider")
         event = await get_event_by_id(session, room.event_id)
@@ -1108,7 +1124,9 @@ async def api_stop_floor_transcription(room_id: int):
         if not room:
             raise HTTPException(status_code=400, detail="Invalid room")
         if room.floor_source == "program_ingest":
-            raise HTTPException(status_code=409, detail="Revoke or disable program ingest in the room settings to stop its floor source")
+            raise HTTPException(
+                status_code=409, detail="Revoke or disable program ingest in the room settings to stop its floor source"
+            )
         event = await get_event_by_id(session, room.event_id)
         if not event:
             raise HTTPException(status_code=400, detail="Event not found")

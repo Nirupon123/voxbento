@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Accept Hosting Invitation — Voxbento{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', path='css/auth.css') }}" />
+{% endblock %}
+
+{% block content %}
+<div class="login-page">
+  <div class="login-card">
+    <div class="login-brand">
+      <img src="{{ url_for('static', path='img/wordmark.png') }}" alt="Voxbento" class="brand-text brand-logo-lg" />
+      <span class="login-subtitle">Event Hosting Invitation</span>
+    </div>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    {% if not valid %}
+    <div class="alert alert-error">
+      {{ error_message|default('This invitation link is invalid or has expired.', true) }}
+    </div>
+    <div class="login-footer" style="margin-top: 24px;">
+      <a href="/login" class="btn btn-outline btn-block">Sign in to existing account</a>
+      <a href="/" style="margin-top: 12px; display: inline-block;">← Back to Home</a>
+    </div>
+    {% elif has_usable_password %}
+    <div class="login-prompt" style="margin-bottom: 20px;">
+      <p>Hello <strong>{{ display_name or email }}</strong>,</p>
+      <p>You have been invited to host multilingual events on VoxBento.</p>
+    </div>
+    <form method="post" action="/invite/accept/{{ token }}" class="login-form">
+      <button type="submit" class="btn btn-primary btn-block">Accept Invitation & Go to Workspace</button>
+    </form>
+    <div class="login-footer" style="margin-top: 24px;">
+      <a href="/">← Back to Home</a>
+    </div>
+    {% else %}
+    <div class="login-prompt" style="margin-bottom: 20px;">
+      <p>Welcome! Set up your password for <strong>{{ email }}</strong> to activate your organizer account.</p>
+    </div>
+    <form method="post" action="/invite/accept/{{ token }}" class="login-form">
+      <label for="display_name">Display Name (optional)</label>
+      <input type="text" id="display_name" name="display_name" value="{{ display_name|default('', true) }}" placeholder="Your Name" />
+
+      <label for="password">Choose Password (min. 8 characters)</label>
+      <input type="password" id="password" name="password" minlength="8" required placeholder="••••••••" />
+
+      <label for="password_confirm">Confirm Password</label>
+      <input type="password" id="password_confirm" name="password_confirm" minlength="8" required placeholder="••••••••" />
+
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top: 12px;">Create Account & Go to Workspace</button>
+    </form>
+    <div class="login-footer" style="margin-top: 24px;">
+      <span>Already have an account? <a href="/login">Sign in</a></span>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

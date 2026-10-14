@@ -99,3 +99,26 @@ async def send_role_invite_email(email_to: str, invite_url: str, role_name: str,
             "invite_url": invite_url,
         },
     )
+
+
+async def send_hosting_invite_email(email_to: str, invite_url: str, is_existing_user: bool = False) -> None:
+    await _send_email_async(
+        email_to=email_to,
+        subject="You've been invited to host events on VoxBento",
+        template_name="hosting_invite.html",
+        template_body={
+            "invite_url": invite_url,
+            "is_existing_user": is_existing_user,
+        },
+    )
+
+
+async def send_hosting_granted_email(email_to: str, login_url: str) -> None:
+    await _send_email_async(
+        email_to=email_to,
+        subject="Hosting access granted on VoxBento",
+        template_name="hosting_granted.html",
+        template_body={
+            "login_url": login_url,
+        },
+    )

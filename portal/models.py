@@ -411,6 +411,9 @@ class User(Base):
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_host: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    hosting_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
+    hosting_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     memberships: Mapped[list[EventMembership]] = relationship(

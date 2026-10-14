@@ -361,6 +361,12 @@ class InviteToken(Base):
 # ---------------------------------------------------------------------------
 
 
+TOKEN_TYPE_VERIFICATION = "verification"  # nosec B105
+TOKEN_TYPE_MAGIC_LINK = "magic_link"  # nosec B105
+TOKEN_TYPE_PASSWORD_RESET = "password_reset"  # nosec B105
+TOKEN_TYPE_HOSTING_INVITE = "hosting_invite"  # nosec B105
+
+
 class AuthToken(Base):
     __tablename__ = "auth_tokens"
 

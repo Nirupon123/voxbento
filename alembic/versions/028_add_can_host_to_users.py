@@ -1,8 +1,8 @@
 """add can_host to users
 
-Revision ID: 027
-Revises: 026
-Create Date: 2026-10-13 10:59:09.890928
+Revision ID: 028
+Revises: 027
+Create Date: 2026-10-14 11:31:00.000000
 
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ import sqlalchemy as sa
 logger = logging.getLogger("alembic.runtime.migration")
 
 # revision identifiers, used by Alembic.
-revision: str = '027'
-down_revision: Union[str, Sequence[str], None] = '026'
+revision: str = '028'
+down_revision: Union[str, Sequence[str], None] = '027'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

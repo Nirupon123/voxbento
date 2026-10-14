@@ -39,7 +39,6 @@ from portal.database import (
     create_api_key,
     create_auth_token,
     create_booth,
-    create_event,
     create_event_with_owner,
     create_invite_token,
     create_room,
@@ -79,14 +78,11 @@ from portal.database import (
     set_room_membership,
     update_user_active,
 )
-<<<<<<< HEAD
-from portal.email import send_role_invite_email
-from portal.globals import _JS_CACHE_BUST, booths
-=======
 from portal.email import send_hosting_granted_email, send_hosting_invite_email, send_role_invite_email
-from portal.globals import _JS_CACHE_BUST, booths, get_http_client
->>>>>>> 96c8278 (initial commit for event hosting access on voxbento)
+from portal.globals import _JS_CACHE_BUST, booths
 from portal.models import (
+    TOKEN_TYPE_HOSTING_INVITE,
+    TOKEN_TYPE_MAGIC_LINK,
     AuthToken,
     BoothTranslationLanguage,
     Event,
@@ -96,6 +92,7 @@ from portal.models import (
     User,
     utc_now,
 )
+from portal.program_ingest import room_lock
 from portal.rate_limit import check_rate_limit
 from portal.transcription import ALLOWED_MODELS, ProviderConfig, ProviderEnum, get_api_key
 from portal.transcription.worker import start_transcription_worker, stop_transcription_worker
@@ -126,7 +123,7 @@ def _apply_api_key_updates(
 
 async def _send_admin_invite(session, user: User, role_name: str, context_name: str, target_url: str):
     token_val = secrets.token_hex(32)
-    await create_auth_token(session, jti=token_val, user_id=user.id, token_type="magic_link")
+    await create_auth_token(session, jti=token_val, user_id=user.id, token_type=TOKEN_TYPE_MAGIC_LINK)
     invite_url = f"{settings.public_base_url}/auth/magic/{token_val}?next={urllib.parse.quote(target_url)}"
     await send_role_invite_email(user.email, invite_url, role_name, context_name)
 
@@ -1518,7 +1515,7 @@ async def admin_users(
                 select(AuthToken)
                 .where(
                     AuthToken.user_id.in_(user_ids),
-                    AuthToken.token_type == "hosting_invite",
+                    AuthToken.token_type == TOKEN_TYPE_HOSTING_INVITE,
                     AuthToken.used_at.is_(None),
                 )
                 .order_by(AuthToken.created_at.desc())
@@ -1592,7 +1589,7 @@ async def admin_invite_user(request: Request):
             select(AuthToken)
             .where(
                 AuthToken.user_id == target_user.id,
-                AuthToken.token_type == "hosting_invite",
+                AuthToken.token_type == TOKEN_TYPE_HOSTING_INVITE,
                 AuthToken.used_at.is_(None),
             )
         )
@@ -1604,7 +1601,7 @@ async def admin_invite_user(request: Request):
         tok = await create_auth_token(
             session,
             user_id=target_user.id,
-            token_type="hosting_invite",
+            token_type=TOKEN_TYPE_HOSTING_INVITE,
             expires_in_seconds=7 * 86400,
         )
 
@@ -1662,7 +1659,7 @@ async def admin_toggle_user_hosting(request: Request, user_id: int):
             select(AuthToken)
             .where(
                 AuthToken.user_id == user.id,
-                AuthToken.token_type == "hosting_invite",
+                AuthToken.token_type == TOKEN_TYPE_HOSTING_INVITE,
                 AuthToken.used_at.is_(None),
             )
         )
@@ -1697,7 +1694,7 @@ async def admin_cancel_invite(request: Request, token_id: int):
         raise HTTPException(status_code=400, detail="Invalid request origin.")
 
     async with get_session() as session:
-        tok_stmt = select(AuthToken).where(AuthToken.id == token_id, AuthToken.token_type == "hosting_invite")
+        tok_stmt = select(AuthToken).where(AuthToken.id == token_id, AuthToken.token_type == TOKEN_TYPE_HOSTING_INVITE)
         tok = (await session.execute(tok_stmt)).scalar_one_or_none()
         if tok:
             await session.delete(tok)
@@ -1712,7 +1709,7 @@ async def admin_resend_invite(request: Request, token_id: int):
         raise HTTPException(status_code=400, detail="Invalid request origin.")
 
     async with get_session() as session:
-        tok_stmt = select(AuthToken).where(AuthToken.id == token_id, AuthToken.token_type == "hosting_invite")
+        tok_stmt = select(AuthToken).where(AuthToken.id == token_id, AuthToken.token_type == TOKEN_TYPE_HOSTING_INVITE)
         old_tok = (await session.execute(tok_stmt)).scalar_one_or_none()
         if old_tok is None:
             raise HTTPException(status_code=404, detail="Invitation not found.")
@@ -1731,7 +1728,7 @@ async def admin_resend_invite(request: Request, token_id: int):
         new_tok = await create_auth_token(
             session,
             user_id=user_id,
-            token_type="hosting_invite",
+            token_type=TOKEN_TYPE_HOSTING_INVITE,
             expires_in_seconds=7 * 86400,
         )
 
@@ -1772,7 +1769,7 @@ async def admin_user_detail(request: Request, user_id: int):
                 select(AuthToken)
                 .where(
                     AuthToken.user_id == user_id,
-                    AuthToken.token_type == "hosting_invite",
+                    AuthToken.token_type == TOKEN_TYPE_HOSTING_INVITE,
                     AuthToken.used_at.is_(None),
                 )
                 .order_by(AuthToken.created_at.desc())

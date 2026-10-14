@@ -15,8 +15,8 @@ Previously, only global Administrators could initiate event creation in VoxBento
    - Machine integrations (`POST /api/v1/events/`, `GET /oauth/authorize`, `POST /api/events/{slug}/booths`) remain completely exempt from `can_host` gating to ensure full backwards compatibility with external services (e.g. Eventyay).
 
 ## Data Model & Migrations
-- **Migration `027_add_can_host_to_users`**:
-  - Adds `can_host` (Boolean, default `False`) and `hosting_requested_at` (DateTime, nullable) columns to the `users` table using Alembic batch operations for SQLite compatibility.
+- **Migration `028_add_can_host_to_users`**:
+  - Adds `can_host` (Boolean, default `False`), `hosting_requested_at` (DateTime, nullable), and `hosting_revoked_at` (DateTime, nullable) columns to the `users` table using Alembic batch operations for SQLite compatibility.
   - Automatically backfills `can_host = True` for all existing users with an active `event_owner` membership.
   - Logs backfilled user IDs for auditability.
 - **SQLite Configuration**:

@@ -5,14 +5,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+import sqlalchemy as sa
 
 from portal.auth import (
     create_participant_token,
     create_token,
     create_user_token,
+    decode_token,
     get_current_user,
     hash_password,
     require_user,
@@ -36,15 +38,27 @@ from portal.database import (
 from portal.email import send_magic_login_email, send_password_reset_email, send_verification_email
 from portal.email_sender import send_delayed_onboarding_email
 from portal.globals import _JS_CACHE_BUST
+from portal.models import AuthToken, utc_now
 from portal.rate_limit import check_rate_limit
 from portal.schemas.auth import TokenRequest, TokenResponse
-from portal.utils import safe_redirect
+from portal.utils import safe_redirect, verify_same_origin
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def set_auth_cookie(response: Response, token: str) -> None:
+    """Set the user authentication cookie with standard settings."""
+    response.set_cookie(
+        key="user_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=settings.jwt_expiry_seconds,
+    )
 
 
 @router.post("/api/auth/token", response_model=TokenResponse)
@@ -456,11 +470,20 @@ async def account_page(request: Request):
         for m in room_memberships
         if m.role == "room_coordinator" and m.room and m.room.event
     }
+    has_active_hosting = bool(user.is_admin or user.can_host)
+    has_owned_events = any(m.role == "event_owner" for m in event_memberships)
+    is_hosting_revoked = bool(user.hosting_revoked_at is not None)
+
     for m in event_memberships:
+        is_disabled = False
         if m.event is None:
             link = "#"
         elif m.role == "event_owner":
-            link = f"/workspace/events/{m.event.id}/"
+            if is_hosting_revoked:
+                link = "#"
+                is_disabled = True
+            else:
+                link = f"/workspace/events/{m.event.id}/"
         elif m.event_id in coordinated_event_slugs:
             link = f"/mission-control/{coordinated_event_slugs[m.event_id]}/"
         else:
@@ -472,6 +495,7 @@ async def account_page(request: Request):
                 "type": "Event",
                 "role": m.role,
                 "created_at": m.created_at,
+                "is_disabled": is_disabled,
             }
         )
     for m in room_memberships:
@@ -504,7 +528,7 @@ async def account_page(request: Request):
     if user.is_admin:
         management_home = "/admin/"
         management_label = "Admin Panel"
-    elif any(m.role == "event_owner" for m in event_memberships):
+    elif user.can_host or (has_owned_events and not is_hosting_revoked):
         management_home = "/workspace/"
         management_label = "Organizer Workspace"
     elif any(m.role == "room_coordinator" for m in room_memberships):
@@ -522,6 +546,7 @@ async def account_page(request: Request):
             "memberships": unified_memberships,
             "management_home": management_home,
             "management_label": management_label,
+            "is_hosting_revoked": is_hosting_revoked,
         },
     )
 
@@ -559,3 +584,153 @@ async def remove_password_api(request: Request):
         await update_user(session, user.id, password_hash=None)
 
     return {"status": "ok"}
+
+
+@router.get("/invite/accept/{token}")
+async def invite_accept_page(request: Request, token: str):
+    """Render the invitation acceptance page for a hosting access token."""
+    async with get_session() as session:
+        tok = await get_auth_token(session, token)
+        if tok is None or tok.token_type != "hosting_invite" or tok.is_expired or tok.is_used:
+            return templates.TemplateResponse(
+                request=request,
+                name="accept_invite.html",
+                context={"valid": False, "error_message": "This invitation link is invalid or has expired."},
+            )
+        user = tok.user
+        if user is None or not user.is_active:
+            return templates.TemplateResponse(
+                request=request,
+                name="accept_invite.html",
+                context={"valid": False, "error_message": "This account is inactive or invalid."},
+            )
+
+        cookie = request.cookies.get("user_token")
+        is_signed_in_as_user = False
+        if cookie:
+            try:
+                payload = decode_token(cookie)
+                if str(payload.get("sub")) == str(user.id):
+                    is_signed_in_as_user = True
+            except Exception:
+                pass
+
+        has_usable_password = (bool(user.password_hash) and bool(user.email_verified)) or is_signed_in_as_user
+        return templates.TemplateResponse(
+            request=request,
+            name="accept_invite.html",
+            context={
+                "valid": True,
+                "token": token,
+                "email": user.email,
+                "display_name": user.display_name,
+                "has_usable_password": has_usable_password,
+            },
+        )
+
+
+@router.post("/invite/accept/{token}")
+async def invite_accept_submit(request: Request, token: str):
+    """Redeem a hosting invitation token, setting password if new, and granting can_host."""
+    if not verify_same_origin(request):
+        raise HTTPException(status_code=400, detail="Invalid request origin.")
+
+    # Read-only phase: determine initial usable password branch
+    async with get_session() as session:
+        tok = await get_auth_token(session, token)
+        if tok is None or tok.token_type != "hosting_invite" or tok.is_expired or tok.is_used:
+            raise HTTPException(status_code=400, detail="Invalid or expired invite token.")
+        user = tok.user
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=403, detail="Account is deactivated.")
+
+        cookie = request.cookies.get("user_token")
+        is_signed_in_as_user = False
+        if cookie:
+            try:
+                payload = decode_token(cookie)
+                if str(payload.get("sub")) == str(user.id):
+                    is_signed_in_as_user = True
+            except Exception:
+                pass
+
+        initial_usable = (bool(user.password_hash) and bool(user.email_verified)) or is_signed_in_as_user
+
+    password = ""
+    password_confirm = ""
+    display_name = ""
+    if not initial_usable:
+        form = await request.form()
+        password = form.get("password", "")
+        password_confirm = form.get("password_confirm", "")
+        display_name = form.get("display_name", "").strip()
+        if len(password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+        if password != password_confirm:
+            raise HTTPException(status_code=400, detail="Passwords do not match.")
+
+    # Transactional redemption
+    async with get_session() as session:
+        tok = await get_auth_token(session, token)
+        if tok is None or tok.token_type != "hosting_invite" or tok.is_expired or tok.is_used:
+            raise HTTPException(status_code=400, detail="Invalid or expired invite token.")
+        user = tok.user
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=403, detail="Account is deactivated.")
+
+        current_usable = (bool(user.password_hash) and bool(user.email_verified)) or is_signed_in_as_user
+        if current_usable != initial_usable:
+            # Concurrency mismatch: abort with 409 without consuming token
+            raise HTTPException(status_code=409, detail="Account state changed. Please reload.")
+
+        if not current_usable:
+            user.password_hash = hash_password(password)
+            user.email_verified = True
+            if display_name:
+                user.display_name = display_name
+
+        user.can_host = True
+        user.hosting_revoked_at = None
+        user.hosting_requested_at = None
+        tok.used_at = utc_now()
+
+        # Delete any pending hosting_invite tokens for this user
+        delete_stmt = (
+            sa.delete(AuthToken)
+            .where(
+                AuthToken.user_id == user.id,
+                AuthToken.token_type == "hosting_invite",
+                AuthToken.id != tok.id,
+            )
+        )
+        await session.execute(delete_stmt)
+
+        # Copy primitives inside the session block before exit to prevent DetachedInstanceError
+        user_id = user.id
+        email = user.email
+        display_name = user.display_name
+        is_admin = user.is_admin
+
+    # Check if existing usable user is already signed in as this user
+    if initial_usable:
+        current_sub = None
+        cookie = request.cookies.get("user_token")
+        if cookie:
+            try:
+                payload = decode_token(cookie)
+                current_sub = payload.get("sub")
+            except Exception:
+                pass
+        if current_sub and str(user_id) == str(current_sub):
+            return safe_redirect("/workspace/")
+
+    # Generate JWT and set auth cookie only in branch that requires login
+    jwt_token = create_user_token(
+        user_id=user_id,
+        email=email,
+        display_name=display_name,
+        is_admin=is_admin,
+    )
+    response = safe_redirect("/workspace/")
+    set_auth_cookie(response, jwt_token)
+    return response

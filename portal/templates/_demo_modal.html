@@ -1,0 +1,224 @@
+<!-- Demo Request Modal -->
+<div id="demo-modal" class="fixed inset-0 z-[100] flex items-center justify-center hidden" style="position: fixed; inset: 0; z-index: 9999; display: none; align-items: center; justify-content: center;">
+    <!-- Backdrop -->
+    <div class="absolute inset-0 bg-[#0d0f10]/60 backdrop-blur-sm" onclick="closeDemoModal()" style="position: absolute; inset: 0; background: rgba(13,15,16,0.6); backdrop-filter: blur(4px);"></div>
+    
+    <!-- Modal Content -->
+    <div class="relative bg-white rounded-xl shadow-2xl border-2 border-[#0d0f10] w-full max-w-lg mx-4 overflow-hidden flex flex-col max-h-[90vh]" style="position: relative; background: #fff; border-radius: 12px; box-shadow: 8px 8px 0px #0d0f10; border: 3px solid #0d0f10; width: 100%; max-width: 500px; margin: 16px; overflow: hidden; display: flex; flex-direction: column; max-height: 90vh;">
+        <!-- Header -->
+        <div class="p-6 border-b border-gray-200 flex justify-between items-center bg-gray-50" style="padding: 20px 24px; border-bottom: 2px solid #eef2f6; display: flex; justify-content: space-between; align-items: center; background: #f8fafc;">
+            <h2 class="text-xl font-extrabold text-[#0d0f10]" style="margin: 0; font-size: 1.25rem; font-weight: 800; color: #0d0f10;">Request Hosting Access / Demo</h2>
+            <button type="button" onclick="closeDemoModal()" aria-label="Close demo modal" title="Close" style="background: none; border: none; cursor: pointer; color: #64748b; padding: 4px;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+        
+        <!-- Form Body -->
+        <div class="p-6 overflow-y-auto" style="padding: 24px; overflow-y: auto;">
+            <form id="demo-request-form" style="display: flex; flex-direction: column; gap: 16px;">
+                <!-- Step 1: Email -->
+                <div id="demo-step-1" style="display: flex; flex-direction: column; gap: 16px;">
+                    <div>
+                        <input type="email" id="demo-email" required placeholder="Your work email*" value="{{ (user.email if user else '') }}" class="w-full px-4 py-3 rounded bg-gray-50 border border-gray-300 text-[#0d0f10]" style="width: 100%; padding: 12px 16px; border-radius: 6px; border: 2px solid #cbd5e1; box-sizing: border-box; font-size: 14px;">
+                    </div>
+                    
+                    <div style="display: flex; align-items: flex-start; gap: 8px;">
+                        <input type="checkbox" id="demo-privacy" required checked style="margin-top: 4px; width: 16px; height: 16px;">
+                        <label for="demo-privacy" style="font-size: 12px; color: #64748b;">I agree to VoxBento's <a href="https://voxbento.com/privacy" target="_blank" style="color: #2563eb; text-decoration: underline;">Privacy Policy</a> and consent to receive communications.</label>
+                    </div>
+                </div>
+
+                <!-- Step 2: Details (Hidden initially) -->
+                <div id="demo-step-2" class="hidden" style="display: none; flex-direction: column; gap: 16px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <input type="text" id="demo-firstname" placeholder="First Name*" value="{{ (user.display_name.split(' ')[0] if user and user.display_name else '') }}" style="width: 100%; padding: 12px 16px; border-radius: 6px; border: 2px solid #cbd5e1; box-sizing: border-box; font-size: 14px;">
+                        <input type="text" id="demo-lastname" placeholder="Last Name*" value="{{ (user.display_name.split(' ')[1] if user and user.display_name and ' ' in user.display_name else '') }}" style="width: 100%; padding: 12px 16px; border-radius: 6px; border: 2px solid #cbd5e1; box-sizing: border-box; font-size: 14px;">
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 12px;">
+                        <select id="demo-phonecode" style="padding: 12px 8px; border-radius: 6px; border: 2px solid #cbd5e1; box-sizing: border-box; font-size: 14px;">
+                            <option value="+1">+1 (US)</option>
+                            <option value="+44">+44 (UK)</option>
+                            <option value="+91">+91 (IN)</option>
+                            <option value="other">Other</option>
+                        </select>
+                        <input type="tel" id="demo-phone" placeholder="Phone Number*" style="width: 100%; padding: 12px 16px; border-radius: 6px; border: 2px solid #cbd5e1; box-sizing: border-box; font-size: 14px;">
+                    </div>
+                    <div>
+                        <input type="text" id="demo-company" placeholder="Company / Organization Name*" style="width: 100%; padding: 12px 16px; border-radius: 6px; border: 2px solid #cbd5e1; box-sizing: border-box; font-size: 14px;">
+                    </div>
+                    <div>
+                        <select id="demo-country" style="width: 100%; padding: 12px 16px; border-radius: 6px; border: 2px solid #cbd5e1; box-sizing: border-box; font-size: 14px;">
+                            <option value="" disabled selected>Country*</option>
+                            <option value="US">United States</option>
+                            <option value="UK">United Kingdom</option>
+                            <option value="IN">India</option>
+                            <option value="CA">Canada</option>
+                            <option value="AU">Australia</option>
+                            <option value="DE">Germany</option>
+                            <option value="FR">France</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <select id="demo-industry" style="width: 100%; padding: 12px 16px; border-radius: 6px; border: 2px solid #cbd5e1; box-sizing: border-box; font-size: 14px;">
+                            <option value="" disabled selected>Industry</option>
+                            <option value="Technology">Technology</option>
+                            <option value="Education">Education</option>
+                            <option value="Enterprise">Enterprise</option>
+                            <option value="Non-Profit">Non-Profit</option>
+                            <option value="Other">Other</option>
+                        </select>
+                        <select id="demo-size" style="width: 100%; padding: 12px 16px; border-radius: 6px; border: 2px solid #cbd5e1; box-sizing: border-box; font-size: 14px;">
+                            <option value="" disabled selected>Company Size</option>
+                            <option value="1-50">1-50</option>
+                            <option value="51-200">51-200</option>
+                            <option value="201-1000">201-1000</option>
+                            <option value="1000+">1000+</option>
+                        </select>
+                    </div>
+                    <div>
+                        <select id="demo-language" style="width: 100%; padding: 12px 16px; border-radius: 6px; border: 2px solid #cbd5e1; box-sizing: border-box; font-size: 14px;">
+                            <option value="" disabled selected>I need language support for...*</option>
+                            <option value="Conferences">Conferences</option>
+                            <option value="Internal Meetings">Internal Meetings</option>
+                            <option value="Webinars">Webinars</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <button type="submit" id="demo-submit-btn" style="width: 100%; margin-top: 8px; background: #fbbf24; border: 2px solid #0d0f10; border-radius: 6px; box-shadow: 4px 4px 0px #0d0f10; font-weight: 800; padding: 14px; cursor: pointer; text-transform: uppercase; font-size: 14px; letter-spacing: 0.5px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                    <span>Continue</span>
+                    <svg class="hidden" id="demo-spinner" style="display: none; width: 20px; height: 20px; animation: spin 1s linear infinite;" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle style="opacity: 0.25;" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path style="opacity: 0.75;" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                </button>
+                
+                <div id="demo-success" style="display: none; color: #16a34a; background: #f0fdf4; border: 2px solid #86efac; padding: 16px; border-radius: 6px; font-size: 14px; text-align: center; font-weight: 700;">
+                    Thank you! We've received your request and will be in touch shortly.
+                </div>
+                <div id="demo-error" style="display: none; color: #dc2626; background: #fef2f2; border: 2px solid #fca5a5; padding: 16px; border-radius: 6px; font-size: 14px; text-align: center; font-weight: 700;">
+                    Oops! Something went wrong. Please try again.
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    let demoStep = 1;
+
+    function openDemoModal() {
+        const modal = document.getElementById('demo-modal');
+        if (!modal) return;
+        modal.style.display = 'flex';
+        modal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        demoStep = 1;
+        document.getElementById('demo-step-1').style.display = 'flex';
+        document.getElementById('demo-step-1').classList.remove('hidden');
+        document.getElementById('demo-step-2').style.display = 'none';
+        document.getElementById('demo-step-2').classList.add('hidden');
+        document.getElementById('demo-success').style.display = 'none';
+        document.getElementById('demo-success').classList.add('hidden');
+        document.getElementById('demo-error').style.display = 'none';
+        document.getElementById('demo-error').classList.add('hidden');
+        const submitBtn = document.getElementById('demo-submit-btn');
+        submitBtn.style.display = 'flex';
+        submitBtn.classList.remove('hidden');
+        submitBtn.querySelector('span').textContent = 'Continue';
+    }
+
+    function closeDemoModal() {
+        const modal = document.getElementById('demo-modal');
+        if (!modal) return;
+        modal.style.display = 'none';
+        modal.classList.add('hidden');
+        document.body.style.overflow = '';
+    }
+
+    const demoForm = document.getElementById('demo-request-form');
+    if (demoForm) {
+        demoForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            if (demoStep === 1) {
+                const email = document.getElementById('demo-email').value;
+                const privacy = document.getElementById('demo-privacy').checked;
+                
+                if (email && privacy) {
+                    demoStep = 2;
+                    document.getElementById('demo-step-1').style.display = 'none';
+                    document.getElementById('demo-step-1').classList.add('hidden');
+                    document.getElementById('demo-step-2').style.display = 'flex';
+                    document.getElementById('demo-step-2').classList.remove('hidden');
+                    
+                    document.getElementById('demo-firstname').required = true;
+                    document.getElementById('demo-lastname').required = true;
+                    document.getElementById('demo-phone').required = true;
+                    document.getElementById('demo-company').required = true;
+                    document.getElementById('demo-country').required = true;
+                    document.getElementById('demo-language').required = true;
+
+                    const submitBtn = document.getElementById('demo-submit-btn');
+                    submitBtn.querySelector('span').textContent = 'Submit Request';
+                }
+            } else {
+                const btn = document.getElementById('demo-submit-btn');
+                const spinner = document.getElementById('demo-spinner');
+                
+                btn.disabled = true;
+                spinner.style.display = 'inline-block';
+                spinner.classList.remove('hidden');
+                document.getElementById('demo-error').style.display = 'none';
+                document.getElementById('demo-error').classList.add('hidden');
+                
+                const data = {
+                    email: document.getElementById('demo-email').value,
+                    firstName: document.getElementById('demo-firstname').value,
+                    lastName: document.getElementById('demo-lastname').value,
+                    phoneNumber: document.getElementById('demo-phonecode').value + " " + document.getElementById('demo-phone').value,
+                    companyName: document.getElementById('demo-company').value,
+                    country: document.getElementById('demo-country').value,
+                    industry: document.getElementById('demo-industry').value,
+                    companySize: document.getElementById('demo-size').value,
+                    languageSupport: document.getElementById('demo-language').value
+                };
+                
+                try {
+                    const response = await fetch('/api/request-demo', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(data)
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.ok) {
+                        document.getElementById('demo-step-2').style.display = 'none';
+                        document.getElementById('demo-step-2').classList.add('hidden');
+                        btn.style.display = 'none';
+                        btn.classList.add('hidden');
+                        document.getElementById('demo-success').style.display = 'block';
+                        document.getElementById('demo-success').classList.remove('hidden');
+                        setTimeout(closeDemoModal, 3000);
+                        setTimeout(() => { window.location.reload(); }, 3200);
+                    } else {
+                        document.getElementById('demo-error').style.display = 'block';
+                        document.getElementById('demo-error').classList.remove('hidden');
+                    }
+                } catch(err) {
+                    document.getElementById('demo-error').style.display = 'block';
+                    document.getElementById('demo-error').classList.remove('hidden');
+                } finally {
+                    btn.disabled = false;
+                    spinner.style.display = 'none';
+                    spinner.classList.add('hidden');
+                }
+            }
+        });
+    }
+</script>

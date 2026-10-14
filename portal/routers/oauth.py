@@ -130,12 +130,6 @@ async def authorize_get(
             login_url += f"&email={urllib.parse.quote(login_hint)}"
         return safe_redirect(url=login_url, status_code=status.HTTP_303_SEE_OTHER)
 
-    if login_hint and user.get("email", "").lower() != login_hint.lower().strip():
-        # Different user logged in than the one requested by Eventyay — redirect to login as login_hint
-        login_url = f"/login?next={next_url}&email={urllib.parse.quote(login_hint)}"
-        resp = safe_redirect(url=login_url, status_code=status.HTTP_303_SEE_OTHER)
-        resp.delete_cookie("user_token")
-        return resp
 
     if response_type != "code":
         raise HTTPException(status_code=400, detail="Unsupported response_type. Only 'code' is supported.")

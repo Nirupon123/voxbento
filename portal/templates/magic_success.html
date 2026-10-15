@@ -5,10 +5,15 @@
 <div style="max-width: 480px; margin: 80px auto; text-align: center; background: #fff; padding: 40px 20px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05); border: 1px solid #e2e8f0;">
   <div style="width: 64px; height: 64px; background: #22c55e; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 32px; margin: 0 auto 20px;">✓</div>
   <h2 style="margin-top: 0; color: #0f172a;">Successfully Signed In</h2>
-  <p style="color: #64748b; font-size: 16px; margin-bottom: 30px;">You are now logged into VoxBento.</p>
-  <p style="color: #0f172a; font-weight: 500; padding: 15px; background: #f8fafc; border-radius: 8px; line-height: 1.6;">
-    Please close this tab and return to your original window to continue authorizing the application. If you are not redirected automatically, <a id="manual-redirect-link" href="#" target="voxbento_oauth" style="color: #2563eb; text-decoration: underline; font-weight: 600; cursor: pointer;">click me</a>.
-  </p>
+  <p style="color: #64748b; font-size: 16px; margin-bottom: 24px;">You are now logged into VoxBento.</p>
+
+  <div id="status-banner" style="display: flex; align-items: center; justify-content: center; gap: 10px; color: #1e40af; font-weight: 500; padding: 14px 18px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; line-height: 1.6; margin-bottom: 20px; text-align: left;">
+    <span style="font-size: 20px;">ℹ️</span>
+    <div>
+      <div style="font-weight: 600; color: #1e3a8a;">Session synchronized</div>
+      <div style="color: #3b82f6; font-size: 14px;">Please return to your original tab to continue authorizing. If you are not redirected automatically, <a id="manual-redirect-link" href="#" target="voxbento_oauth" style="color: #1d4ed8; text-decoration: underline; font-weight: 600; cursor: pointer;">click here</a>.</div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -43,30 +48,6 @@
 
       if (authChannel && targetUrl) {
           authChannel.postMessage({ type: 'logged_in', url: targetUrl });
-      }
-
-      function triggerBrowserAlert(msg) {
-          try {
-              delete window.alert;
-              if (typeof window.alert === 'function') {
-                  window.alert(msg);
-                  return;
-              }
-          } catch (e) {}
-
-          try {
-              const iframe = document.createElement('iframe');
-              iframe.style.display = 'none';
-              document.body.appendChild(iframe);
-              if (iframe.contentWindow && iframe.contentWindow.alert) {
-                  iframe.contentWindow.alert(msg);
-                  iframe.remove();
-                  return;
-              }
-              iframe.remove();
-          } catch (e) {}
-
-          alert(msg);
       }
 
       function openAuthPopup() {
@@ -114,15 +95,13 @@
               });
           }
 
+          if (authChannel) {
+              authChannel.postMessage({ type: 'logged_in', url: targetUrl });
+              authChannel.postMessage('focus_popup');
+          }
           setTimeout(function() {
-              triggerBrowserAlert("Redirecting to Eventyay authorization page...");
-              if (authChannel) {
-                  authChannel.postMessage({ type: 'logged_in', url: targetUrl });
-                  authChannel.postMessage('focus_popup');
-              }
-              try { window.blur(); } catch (e) {}
               try { window.close(); } catch (e) {}
-          }, 100);
+          }, 1500);
       }
   })();
 </script>

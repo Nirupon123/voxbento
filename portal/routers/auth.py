@@ -46,7 +46,21 @@ templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# In-memory store for magic link polling sessions: poll_id -> {token_id, secret_hash, expires_at, consumed}
+# In-memory registry for ephemeral magic link polling sessions:
+#   poll_id -> {token_jti, nonce_hash, user_id, expires_at, consumed, created_at}
+#
+# Architectural Note on Multi-Worker / Clustered Environments:
+# The core authentication security state (magic token cryptographic validity, expiration,
+# user active status, and single-use `used_at` timestamp) is strictly persisted and validated
+# in the database (`AuthToken` table).
+# This `_magic_polls` registry is strictly an ephemeral 15-minute handshake cache for cross-context
+# polling fallback (/api/auth/magic-poll). In modern browsers, authentication synchronizes
+# immediately client-side via BroadcastChannel('voxbento_auth') without touching the server poll.
+# Because VoxBento currently runs as a single Uvicorn container instance without a multi-worker
+# cluster or Redis layer, this in-memory dictionary avoids unnecessary database migrations and I/O overhead.
+# If VoxBento is scaled horizontally to multi-worker processes or multi-replica deployments
+# without sticky sessions in the future, this ephemeral poll state should be backed by Redis
+# or persisted to the database.
 _magic_polls: dict[str, dict] = {}
 
 
@@ -363,6 +377,13 @@ async def request_magic_link(request: Request):
 
 @router.get("/api/auth/magic-poll")
 async def poll_magic_link(request: Request, poll_id: str = ""):
+    """Poll magic link authentication state for cross-context fallback.
+
+    Note: Same-browser authentication synchronizes client-side via BroadcastChannel.
+    This endpoint serves as an ephemeral polling fallback backed by `_magic_polls`.
+    In multi-worker or clustered deployments without sticky sessions, an external
+    shared store (e.g. Redis or database-backed polling state) would be required.
+    """
     from fastapi.responses import JSONResponse
 
     if not poll_id or len(poll_id) != 64:

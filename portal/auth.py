@@ -280,10 +280,6 @@ async def require_admin(request: Request) -> None:
         if principal["is_global_admin"]:
             return
 
-        user = principal.get("user")
-        if user and getattr(user, "hosting_revoked_at", None) is not None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hosting access revoked.")
-
         if room_id is not None:
             if room_id in principal["coordinated_room_ids"]:
                 return
@@ -344,14 +340,6 @@ async def require_event_owner(request: Request) -> None:
         if principal["is_global_admin"]:
             return
 
-        user = principal.get("user")
-        if user and getattr(user, "hosting_revoked_at", None) is not None:
-            from portal.exceptions import RedirectRequired
-
-            if "application/json" in request.headers.get("accept", "") or request.url.path.startswith("/api/"):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hosting access revoked.")
-            raise RedirectRequired("/account?error=hosting_revoked")
-
         if event_id is not None:
             if event_id in principal["owned_event_ids"]:
                 return
@@ -389,11 +377,15 @@ async def require_hosting_access(request: Request) -> dict:
             raise RedirectRequired(f"/login?next={request.url.path}")
 
         is_hosting_revoked = bool(principal.get("hosting_revoked_at") is not None)
-        if (
-            principal["is_super_admin"]
-            or principal["can_host"]
-            or (bool(principal["owned_event_ids"]) and not is_hosting_revoked)
-        ):
+        if principal["is_super_admin"]:
+            return principal
+
+        if is_hosting_revoked:
+            if "application/json" in request.headers.get("accept", "") or request.url.path.startswith("/api/"):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hosting access revoked.")
+            raise RedirectRequired("/account?error=hosting_revoked")
+
+        if principal["can_host"] or bool(principal["owned_event_ids"]):
             return principal
 
         if "application/json" in request.headers.get("accept", "") or request.url.path.startswith("/api/"):

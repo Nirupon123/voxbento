@@ -9,7 +9,6 @@ from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.types import Message, Receive, Scope, Send
 
-from portal.auth import get_admin_flags, get_current_user
 from portal.utils import safe_redirect
 
 WORKSPACE_PREFIX = "/workspace"
@@ -76,8 +75,6 @@ async def should_redirect_organizer(request: Request) -> bool:
         if principal["user"] is None:
             return False
         if principal["is_super_admin"]:
-            return False
-        if principal.get("hosting_revoked_at") is not None:
             return False
 
         event_match = _EVENT_PATH_RE.match(request.url.path)

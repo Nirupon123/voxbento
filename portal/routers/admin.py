@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import math
 import re
@@ -1598,17 +1599,21 @@ async def admin_invite_user(request: Request):
             await session.delete(et)
         await session.flush()
 
-        tok = await create_auth_token(
+        raw_token = secrets.token_urlsafe(32)
+        token_digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+        await create_auth_token(
             session,
             user_id=target_user.id,
             token_type=TOKEN_TYPE_HOSTING_INVITE,
+            jti=token_digest,
             expires_in_seconds=7 * 86400,
         )
 
         user_email = target_user.email
         has_password = bool(target_user.password_hash)
 
-    invite_url = str(request.base_url).rstrip("/") + f"/invite/accept/{tok.jti}"
+    invite_url = str(request.base_url).rstrip("/") + f"/invite/accept/{raw_token}"
     await send_hosting_invite_email(user_email, invite_url, is_existing_user=has_password)
     return safe_redirect(url="/admin/users/?success=invite_sent", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -1725,14 +1730,18 @@ async def admin_resend_invite(request: Request, token_id: int):
         await session.delete(old_tok)
         await session.flush()
 
-        new_tok = await create_auth_token(
+        raw_token = secrets.token_urlsafe(32)
+        token_digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+        await create_auth_token(
             session,
             user_id=user_id,
             token_type=TOKEN_TYPE_HOSTING_INVITE,
+            jti=token_digest,
             expires_in_seconds=7 * 86400,
         )
 
-    invite_url = str(request.base_url).rstrip("/") + f"/invite/accept/{new_tok.jti}"
+    invite_url = str(request.base_url).rstrip("/") + f"/invite/accept/{raw_token}"
     await send_hosting_invite_email(user_email, invite_url, is_existing_user=has_password)
     return safe_redirect(url="/admin/users/?success=invite_resent", status_code=status.HTTP_303_SEE_OTHER)
 

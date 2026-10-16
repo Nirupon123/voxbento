@@ -25,7 +25,7 @@
 <main class="admin-main account-main">
   {% if request.query_params.get('error') == 'hosting_revoked' %}
   <div class="account-alert-banner">
-    Your hosting access has been revoked. You cannot access or manage events until hosting access is restored.
+    Your hosting access has been revoked. You cannot create new events until hosting access is restored.
   </div>
   {% elif request.query_params.get('error') == 'hosting_access_required' %}
   <div class="account-alert-banner">
@@ -159,15 +159,15 @@
       <div class="security-row">
         <div>
           <h3 class="security-title">Hosting Access Revoked</h3>
-          <p class="security-text">Your hosting access has been revoked. Your existing events are preserved, but cannot be accessed until hosting is restored.</p>
+          <p class="security-text">Your hosting access has been revoked. Your existing events are preserved, but you cannot create new events until hosting is restored.</p>
         </div>
         {% if not user.hosting_requested_at %}
         <button type="button" class="btn btn-primary" onclick="openDemoModal()">Re-request Hosting Access</button>
         {% endif %}
       </div>
       {% if user.hosting_requested_at %}
-      <div class="account-hosting-banner" style="margin-top: 16px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+      <div class="account-hosting-banner account-hosting-banner--spaced">
+        <div class="account-hosting-banner-content">
           <div>
             <p class="account-hosting-banner-title">
               Hosting re-request submitted on {{ user.hosting_requested_at.strftime('%b %d, %Y') }}.

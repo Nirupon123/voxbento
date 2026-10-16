@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from portal.auth import (
     create_participant_token,
@@ -479,11 +481,7 @@ async def account_page(request: Request):
         if m.event is None:
             link = "#"
         elif m.role == "event_owner":
-            if is_hosting_revoked:
-                link = "#"
-                is_disabled = True
-            else:
-                link = f"/workspace/events/{m.event.id}/"
+            link = f"/workspace/events/{m.event.id}/"
         elif m.event_id in coordinated_event_slugs:
             link = f"/mission-control/{coordinated_event_slugs[m.event_id]}/"
         else:
@@ -528,7 +526,7 @@ async def account_page(request: Request):
     if user.is_admin:
         management_home = "/admin/"
         management_label = "Admin Panel"
-    elif user.can_host or (has_owned_events and not is_hosting_revoked):
+    elif user.can_host or has_owned_events:
         management_home = "/workspace/"
         management_label = "Organizer Workspace"
     elif any(m.role == "room_coordinator" for m in room_memberships):
@@ -604,8 +602,9 @@ def _extract_cookie_user_id(request: Request) -> str | None:
 @router.get("/invite/accept/{token}")
 async def invite_accept_page(request: Request, token: str):
     """Render the invitation acceptance page for a hosting access token."""
+    token_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
     async with get_session() as session:
-        tok = await get_auth_token(session, token)
+        tok = await get_auth_token(session, token_digest)
         if tok is None or tok.token_type != TOKEN_TYPE_HOSTING_INVITE or tok.is_expired or tok.is_used:
             return templates.TemplateResponse(
                 request=request,
@@ -620,9 +619,19 @@ async def invite_accept_page(request: Request, token: str):
                 context={"valid": False, "error_message": "This account is inactive or invalid."},
             )
 
-        is_signed_in_as_user = _extract_cookie_user_id(request) == str(user.id)
+        if user.password_hash and not user.email_verified:
+            return templates.TemplateResponse(
+                request=request,
+                name="accept_invite.html",
+                context={
+                    "valid": False,
+                    "error_message": "Please verify your email address first before accepting this invitation.",
+                },
+            )
 
-        has_usable_password = (bool(user.password_hash) and bool(user.email_verified)) or is_signed_in_as_user
+        is_signed_in_as_user = _extract_cookie_user_id(request) == str(user.id)
+        has_password = bool(user.password_hash)
+
         return templates.TemplateResponse(
             request=request,
             name="accept_invite.html",
@@ -631,7 +640,8 @@ async def invite_accept_page(request: Request, token: str):
                 "token": token,
                 "email": user.email,
                 "display_name": user.display_name,
-                "has_usable_password": has_usable_password,
+                "is_signed_in_as_user": is_signed_in_as_user,
+                "has_password": has_password,
             },
         )
 
@@ -642,82 +652,105 @@ async def invite_accept_submit(request: Request, token: str):
     if not verify_same_origin(request):
         raise HTTPException(status_code=400, detail="Invalid request origin.")
 
-    # Read-only phase: determine initial usable password branch
-    async with get_session() as session:
-        tok = await get_auth_token(session, token)
-        if tok is None or tok.token_type != TOKEN_TYPE_HOSTING_INVITE or tok.is_expired or tok.is_used:
-            raise HTTPException(status_code=400, detail="Invalid or expired invite token.")
-        user = tok.user
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=403, detail="Account is deactivated.")
+    token_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    form = await request.form()
+    submitted_password = form.get("password", "")
 
-        is_signed_in_as_user = _extract_cookie_user_id(request) == str(user.id)
-        initial_usable = (bool(user.password_hash) and bool(user.email_verified)) or is_signed_in_as_user
-
-    submitted_password: str | None = None
-    display_name = ""
-    if not initial_usable:
-        form = await request.form()
-        raw_password = form.get("password", "")
-        raw_confirm = form.get("password_confirm", "")
-        display_name = form.get("display_name", "").strip()
-        if len(raw_password) < 8:
-            raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
-        if raw_password != raw_confirm:
-            raise HTTPException(status_code=400, detail="Passwords do not match.")
-        submitted_password = raw_password
-
-    # Transactional redemption
-    async with get_session() as session:
-        tok = await get_auth_token(session, token)
-        if tok is None or tok.token_type != TOKEN_TYPE_HOSTING_INVITE or tok.is_expired or tok.is_used:
-            raise HTTPException(status_code=400, detail="Invalid or expired invite token.")
-        user = tok.user
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=403, detail="Account is deactivated.")
-
-        current_usable = (bool(user.password_hash) and bool(user.email_verified)) or is_signed_in_as_user
-        if current_usable != initial_usable:
-            # Concurrency mismatch: abort with 409 without consuming token
-            raise HTTPException(status_code=409, detail="Account state changed. Please reload.")
-
-        if not current_usable:
-            if not submitted_password:
-                raise HTTPException(status_code=400, detail="Password is required.")
-            user.password_hash = hash_password(submitted_password)
-            user.email_verified = True
-            if display_name:
-                user.display_name = display_name
-
-        user.can_host = True
-        user.hosting_revoked_at = None
-        user.hosting_requested_at = None
-        tok.used_at = utc_now()
-
-        # Delete any pending hosting_invite tokens for this user
-        delete_stmt = (
-            sa.delete(AuthToken)
-            .where(
-                AuthToken.user_id == user.id,
-                AuthToken.token_type == TOKEN_TYPE_HOSTING_INVITE,
-                AuthToken.id != tok.id,
+    try:
+        async with get_session() as session:
+            tok_stmt = (
+                sa.select(AuthToken)
+                .options(sa.orm.joinedload(AuthToken.user))
+                .where(
+                    AuthToken.jti == token_digest,
+                    AuthToken.token_type == TOKEN_TYPE_HOSTING_INVITE,
+                )
             )
-        )
-        await session.execute(delete_stmt)
+            tok_res = await session.execute(tok_stmt)
+            tok = tok_res.scalar_one_or_none()
 
-        # Copy primitives inside the session block before exit to prevent DetachedInstanceError
-        user_id = user.id
-        email = user.email
-        display_name = user.display_name
-        is_admin = user.is_admin
+            if tok is None or tok.is_used or tok.is_expired:
+                raise HTTPException(status_code=400, detail="Invalid or expired invite token.")
 
-    # Check if existing usable user is already signed in as this user
-    if initial_usable:
-        current_sub = _extract_cookie_user_id(request)
-        if current_sub and str(user_id) == current_sub:
-            return safe_redirect("/workspace/")
+            user = tok.user
+            if user is None or not user.is_active:
+                raise HTTPException(status_code=403, detail="Account is deactivated.")
 
-    # Generate JWT and set auth cookie only in branch that requires login
+            is_signed_in_as_user = _extract_cookie_user_id(request) == str(user.id)
+            has_existing_password = bool(user.password_hash)
+
+            if has_existing_password and not user.email_verified:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Please verify your email address before accepting this invitation.",
+                )
+
+            if is_signed_in_as_user:
+                # User is already signed in as this account; no password entry or creation needed
+                pass
+            elif has_existing_password:
+                if not submitted_password or not verify_password(submitted_password, user.password_hash):
+                    raise HTTPException(status_code=400, detail="Invalid password.")
+            else:
+                raw_confirm = form.get("password_confirm", "")
+                display_name = form.get("display_name", "").strip()
+                if len(submitted_password) < 8:
+                    raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+                if submitted_password != raw_confirm:
+                    raise HTTPException(status_code=400, detail="Passwords do not match.")
+                user.password_hash = hash_password(submitted_password)
+                user.email_verified = True
+                if display_name:
+                    user.display_name = display_name
+
+            # Claim the token with an atomic conditional update
+            now = utc_now()
+            claim_stmt = (
+                sa.update(AuthToken)
+                .where(
+                    AuthToken.id == tok.id,
+                    AuthToken.used_at.is_(None),
+                )
+                .values(used_at=now)
+                .execution_options(synchronize_session=False)
+            )
+            claim_res = await session.execute(claim_stmt)
+            if claim_res.rowcount != 1:
+                raise HTTPException(status_code=400, detail="Invalid or expired invite token.")
+
+            # Perform account activation and hosting grant in the same transaction
+            user.can_host = True
+            user.hosting_revoked_at = None
+            user.hosting_requested_at = None
+
+            # Delete any other pending hosting_invite tokens for this user
+            delete_stmt = (
+                sa.delete(AuthToken)
+                .where(
+                    AuthToken.user_id == user.id,
+                    AuthToken.token_type == TOKEN_TYPE_HOSTING_INVITE,
+                    AuthToken.id != tok.id,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            await session.execute(delete_stmt)
+            await session.flush()
+
+            user_id = user.id
+            email = user.email
+            display_name = user.display_name
+            is_admin = user.is_admin
+
+    except (OperationalError, DBAPIError) as exc:
+        err_msg = str(exc).lower()
+        if "busy" in err_msg or "locked" in err_msg or "snapshot" in err_msg:
+            logger.warning("Concurrent redemption conflict on token: %s", exc)
+            raise HTTPException(status_code=400, detail="Invalid or expired invite token.")
+        raise
+
+    if is_signed_in_as_user:
+        return safe_redirect("/workspace/")
+
     jwt_token = create_user_token(
         user_id=user_id,
         email=email,

@@ -12,7 +12,6 @@ from pydantic import BaseModel
 from portal.auth import get_admin_flags, get_current_user, resolve_request_principal
 from portal.database import (
     get_session,
-    get_user_by_email,
     get_user_by_id,
     list_booth_memberships_for_user,
     list_memberships_for_user,
@@ -255,21 +254,16 @@ async def request_demo(request: Request, data: DemoRequestModel):
 
     # 3. Server-side user identification (ignore client-provided user_id/source)
     user_id = None
+    is_authenticated = False
     async with get_session() as session:
         principal = await resolve_request_principal(request, session)
         user = principal["user"]
         if user is not None:
             user_id = user.id
+            is_authenticated = True
             if user.hosting_requested_at is None:
                 user.hosting_requested_at = utc_now()
                 await session.flush()
-        else:
-            user_by_email = await get_user_by_email(session, email)
-            if user_by_email is not None:
-                user_id = user_by_email.id
-                if user_by_email.hosting_requested_at is None:
-                    user_by_email.hosting_requested_at = utc_now()
-                    await session.flush()
 
     cleaned_data = {
         "email": email,
@@ -283,7 +277,7 @@ async def request_demo(request: Request, data: DemoRequestModel):
         "languageSupport": clean(data.languageSupport),
         "notes": clean(data.notes),
         "user_id": user_id,
-        "source": "account" if user_id else "home",
+        "source": "account" if is_authenticated else "home",
     }
 
     try:

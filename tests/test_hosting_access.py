@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import inspect
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -13,7 +16,7 @@ from starlette.requests import Request
 
 from fastapi_app import app
 from portal import database
-from portal.auth import create_user_token, get_admin_flags, hash_password
+from portal.auth import create_user_token, get_admin_flags, hash_password, verify_password
 from portal.database import (
     configure,
     create_auth_token,
@@ -43,6 +46,20 @@ async def setup_db():
 
 def client():
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+async def create_hosting_invite(session, user_id: int, expires_in_seconds: int = 3600) -> tuple[str, AuthToken]:
+    """Helper to create a hosting invite token with SHA-256 digest in DB and return (raw_token, auth_token)."""
+    raw_token = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    tok = await create_auth_token(
+        session,
+        user_id=user_id,
+        token_type="hosting_invite",
+        jti=digest,
+        expires_in_seconds=expires_in_seconds,
+    )
+    return raw_token, tok
 
 
 def create_mock_request(path: str = "/admin/", cookies: dict | None = None, headers: dict | None = None) -> Request:
@@ -121,8 +138,14 @@ async def test_template_context_does_not_overwrite_event_scoped_owner_flag():
 
     ctx = management_template_context(req)
     assert "is_event_owner" not in ctx
-    assert ctx["can_host"] is False or isinstance(ctx["can_host"], bool)
+    assert ctx["can_host"] is False
     assert ctx["is_workspace"] is False
+
+    req.state.principal = {"can_host": True, "is_super_admin": False}
+    req.state.is_workspace = True
+    ctx_resolved = management_template_context(req)
+    assert ctx_resolved["can_host"] is True
+    assert ctx_resolved["is_workspace"] is True
 
 
 @pytest.mark.anyio
@@ -137,23 +160,17 @@ async def test_invite_acceptance_flow_and_primitive_copying():
             email_verified=False,
             can_host=False,
         )
-        tok = await create_auth_token(
-            session,
-            user_id=user.id,
-            token_type="hosting_invite",
-            expires_in_seconds=3600,
-        )
-        token_jti = tok.jti
+        raw_token, tok = await create_hosting_invite(session, user.id, 3600)
 
     async with client() as http:
         # GET form
-        resp_get = await http.get(f"/invite/accept/{token_jti}")
+        resp_get = await http.get(f"/invite/accept/{raw_token}")
         assert resp_get.status_code == 200
         assert "Create Account & Go to Workspace" in resp_get.text
 
         # POST accept
         resp_post = await http.post(
-            f"/invite/accept/{token_jti}",
+            f"/invite/accept/{raw_token}",
             data={
                 "display_name": "Invited Organizer",
                 "password": "ValidPassword123!",
@@ -174,17 +191,19 @@ async def test_invite_acceptance_flow_and_primitive_copying():
             assert updated_user.password_hash is not None
             assert updated_user.display_name == "Invited Organizer"
 
-            # Token marked used
+            # Token marked used and stored only as digest
             used_tok = await session.get(AuthToken, tok.id)
             assert used_tok.is_used is True
+            assert used_tok.jti != raw_token
+            assert used_tok.jti == hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
         # Re-using the token fails (GET shows invalid/expired message, POST returns 400)
-        resp_reuse = await http.get(f"/invite/accept/{token_jti}")
+        resp_reuse = await http.get(f"/invite/accept/{raw_token}")
         assert resp_reuse.status_code == 200
         assert "invalid or has expired" in resp_reuse.text.lower()
 
         resp_reuse_post = await http.post(
-            f"/invite/accept/{token_jti}",
+            f"/invite/accept/{raw_token}",
             data={"password": "AnotherPassword123!", "password_confirm": "AnotherPassword123!"},
             headers={"Origin": "http://test"},
         )
@@ -207,15 +226,15 @@ async def test_revoked_user_accepts_invite_restores_access():
         )
         ev = await create_event(session, slug="rev-restored-ev", display_name="Restored Event")
         await set_event_membership(session, user_id=user.id, event_id=ev.id, role="event_owner")
-        tok = await create_auth_token(session, user_id=user.id, token_type="hosting_invite", expires_in_seconds=3600)
-        token_jti = tok.jti
+        raw_token, tok = await create_hosting_invite(session, user.id, 3600)
         user_id = user.id
         event_id = ev.id
 
     async with client() as http:
-        # POST accept invitation
+        # POST accept invitation with existing password
         resp = await http.post(
-            f"/invite/accept/{token_jti}",
+            f"/invite/accept/{raw_token}",
+            data={"password": "ValidPassword123!"},
             headers={"Origin": "http://test"},
             follow_redirects=False,
         )
@@ -248,13 +267,7 @@ async def test_inactive_user_cannot_be_invited_or_redeem():
             password_hash=hash_password("pw123"),
             is_active=False,
         )
-        tok = await create_auth_token(
-            session,
-            user_id=inactive.id,
-            token_type="hosting_invite",
-            expires_in_seconds=3600,
-        )
-        tok_jti = tok.jti
+        raw_token, tok = await create_hosting_invite(session, inactive.id, 3600)
 
     admin_token = create_user_token(user_id=admin.id, email=admin.email, is_admin=True)
 
@@ -271,7 +284,7 @@ async def test_inactive_user_cannot_be_invited_or_redeem():
 
         # Inactive user attempts redemption -> 403
         res_redeem = await http.post(
-            f"/invite/accept/{tok_jti}",
+            f"/invite/accept/{raw_token}",
             data={"password": "ValidPassword123!", "password_confirm": "ValidPassword123!"},
             headers={"Origin": "http://test"},
         )
@@ -621,30 +634,47 @@ async def test_new_event_button_visibility():
     token_revoked = create_user_token(user_id=revoked_id, email="revoked@example.com")
     async with client() as http:
         # On /account:
-        # 1. Event row is greyed out, context link is disabled with Access Suspended
+        # 1. Event row is active, context link is clickable (Issue #761: revocation does not block access to owned events)
         res_rev_account = await http.get("/account", cookies={"user_token": token_revoked})
         assert res_rev_account.status_code == 200
-        assert "account-row--disabled" in res_rev_account.text
-        assert "Access Suspended" in res_rev_account.text
-        assert f'href="/workspace/events/{event_id}/"' not in res_rev_account.text
+        assert "account-row--disabled" not in res_rev_account.text
+        assert "Access Suspended" not in res_rev_account.text
+        assert f'href="/workspace/events/{event_id}/"' in res_rev_account.text
         # 2. Event Hosting card shows Hosting Access Revoked with Re-request button
         assert "Hosting Access Revoked" in res_rev_account.text
         assert "Re-request Hosting Access" in res_rev_account.text
-        assert "Go to My Events" not in res_rev_account.text
 
-        # 3. Cannot access their already created event (redirected to /account?error=hosting_revoked)
+        # 3. Can access their already created event (NOT blocked)
         res_ev = await http.get(f"/workspace/events/{event_id}/", cookies={"user_token": token_revoked}, follow_redirects=False)
-        assert res_ev.status_code == 303
-        assert res_ev.headers["location"] == "/account?error=hosting_revoked"
+        assert res_ev.status_code == 200
 
-        # 4. API request to event returns 403 Forbidden
+        # 4. API request to event returns 200
         res_api = await http.get(
             f"/workspace/events/{event_id}/",
             cookies={"user_token": token_revoked},
             headers={"Accept": "application/json"},
         )
-        assert res_api.status_code == 403
-        assert res_api.json()["detail"] == "Hosting access revoked."
+        assert res_api.status_code == 200
+
+        # 5. But cannot create new events
+        res_create = await http.post(
+            "/workspace/events/",
+            data={"slug": "new-blocked", "display_name": "Blocked"},
+            cookies={"user_token": token_revoked},
+            headers={"Origin": "http://test"},
+            follow_redirects=False,
+        )
+        assert res_create.status_code == 303
+        assert res_create.headers["location"] == "/account?error=hosting_revoked"
+
+        res_create_api = await http.post(
+            "/workspace/events/",
+            json={"slug": "new-blocked", "display_name": "Blocked"},
+            cookies={"user_token": token_revoked},
+            headers={"Origin": "http://test", "Accept": "application/json"},
+        )
+        assert res_create_api.status_code == 403
+        assert res_create_api.json()["detail"] == "Hosting access revoked."
 
 
 
@@ -761,4 +791,401 @@ async def test_send_demo_request_email_renders_html():
     assert "Education" in msg.body
     assert "Review in Admin Panel" in msg.body
     assert "/admin/users/42/" in msg.body
+
+
+@pytest.mark.anyio
+async def test_unverified_user_with_password_cannot_redeem_without_verification():
+    """An unverified user with an existing password hash cannot redeem an invite without verifying their email first."""
+    original_pw = "OriginalPassword123!"
+    async with get_session() as session:
+        user = await create_user(
+            session,
+            email="unverified_has_pw@example.com",
+            display_name="Unverified User",
+            password_hash=hash_password(original_pw),
+            email_verified=False,
+            can_host=False,
+        )
+        raw_token, tok = await create_hosting_invite(session, user.id, 3600)
+        user_id = user.id
+
+    async with client() as http:
+        # GET should indicate user must verify email first
+        resp_get = await http.get(f"/invite/accept/{raw_token}")
+        assert resp_get.status_code == 200
+        assert "verify your email address" in resp_get.text.lower()
+
+        # POST without password fails
+        resp_post_no_pw = await http.post(
+            f"/invite/accept/{raw_token}",
+            headers={"Origin": "http://test"},
+            follow_redirects=False,
+        )
+        assert resp_post_no_pw.status_code == 400
+        assert "verify your email address" in resp_post_no_pw.text.lower()
+
+        # POST with password also fails because email is unverified
+        resp_post_pw = await http.post(
+            f"/invite/accept/{raw_token}",
+            data={"password": original_pw},
+            headers={"Origin": "http://test"},
+            follow_redirects=False,
+        )
+        assert resp_post_pw.status_code == 400
+        assert "verify your email address" in resp_post_pw.text.lower()
+
+        async with get_session() as session:
+            updated = await get_user_by_id(session, user_id)
+            assert updated.can_host is False
+            assert updated.email_verified is False
+            assert verify_password(original_pw, updated.password_hash) is True
+
+
+@pytest.mark.anyio
+async def test_verified_user_with_password_requires_authentication_or_password():
+    """A verified user with an existing password hash must authenticate or supply password to redeem."""
+    correct_pw = "ValidPassword123!"
+    async with get_session() as session:
+        user = await create_user(
+            session,
+            email="verified_has_pw@example.com",
+            display_name="Verified User",
+            password_hash=hash_password(correct_pw),
+            email_verified=True,
+            can_host=False,
+        )
+        raw_token, tok = await create_hosting_invite(session, user.id, 3600)
+        user_id = user.id
+
+    async with client() as http:
+        # GET displays password verification form when unauthenticated
+        resp_get = await http.get(f"/invite/accept/{raw_token}")
+        assert resp_get.status_code == 200
+        assert "Verify Password & Accept Invitation" in resp_get.text
+
+        # POST without password when unauthenticated -> 400
+        resp_post_no_pw = await http.post(
+            f"/invite/accept/{raw_token}",
+            headers={"Origin": "http://test"},
+            follow_redirects=False,
+        )
+        assert resp_post_no_pw.status_code == 400
+        assert "invalid password" in resp_post_no_pw.text.lower()
+
+        # POST with incorrect password -> 400
+        resp_post_wrong = await http.post(
+            f"/invite/accept/{raw_token}",
+            data={"password": "WrongPassword999!"},
+            headers={"Origin": "http://test"},
+            follow_redirects=False,
+        )
+        assert resp_post_wrong.status_code == 400
+        assert "invalid password" in resp_post_wrong.text.lower()
+
+        # POST with correct password -> 303 redirect
+        resp_post_ok = await http.post(
+            f"/invite/accept/{raw_token}",
+            data={"password": correct_pw},
+            headers={"Origin": "http://test"},
+            follow_redirects=False,
+        )
+        assert resp_post_ok.status_code == 303
+        assert resp_post_ok.headers["location"] == "/workspace/"
+
+        async with get_session() as session:
+            updated = await get_user_by_id(session, user_id)
+            assert updated.can_host is True
+            assert updated.email_verified is True
+            assert verify_password(correct_pw, updated.password_hash) is True
+
+    # When already authenticated, accepts directly without password
+    async with get_session() as session:
+        user2 = await create_user(
+            session,
+            email="auth_user@example.com",
+            display_name="Auth User",
+            password_hash=hash_password("UserPassword123!"),
+            email_verified=True,
+            can_host=False,
+        )
+        raw_token2, tok2 = await create_hosting_invite(session, user2.id, 3600)
+        user2_id = user2.id
+
+    user2_cookie = create_user_token(user_id=user2_id, email="auth_user@example.com")
+    async with client() as http:
+        # GET shows direct accept button
+        resp_get_auth = await http.get(f"/invite/accept/{raw_token2}", cookies={"user_token": user2_cookie})
+        assert resp_get_auth.status_code == 200
+        assert "Accept Invitation & Go to Workspace" in resp_get_auth.text
+
+        # POST accepts without password
+        resp_post_auth = await http.post(
+            f"/invite/accept/{raw_token2}",
+            cookies={"user_token": user2_cookie},
+            headers={"Origin": "http://test"},
+            follow_redirects=False,
+        )
+        assert resp_post_auth.status_code == 303
+        assert resp_post_auth.headers["location"] == "/workspace/"
+
+        async with get_session() as session:
+            updated2 = await get_user_by_id(session, user2_id)
+            assert updated2.can_host is True
+
+
+@pytest.mark.anyio
+async def test_signed_in_passwordless_user_can_accept_invite():
+    """When a user without a password (e.g. stub or magic link) is already signed in, accepting the invite succeeds without requiring a password."""
+    async with get_session() as session:
+        user = await create_user(
+            session,
+            email="passwordless_signed_in@example.com",
+            display_name="Passwordless Signed In",
+            password_hash=None,
+            email_verified=False,
+            can_host=False,
+        )
+        raw_token, tok = await create_hosting_invite(session, user.id, 3600)
+        user_id = user.id
+
+    cookie = create_user_token(user_id=user_id, email="passwordless_signed_in@example.com")
+    async with client() as http:
+        # GET shows accept button without password inputs
+        resp_get = await http.get(f"/invite/accept/{raw_token}", cookies={"user_token": cookie})
+        assert resp_get.status_code == 200
+        assert "Accept Invitation & Go to Workspace" in resp_get.text
+
+        # POST submits with empty/no password and succeeds
+        resp_post = await http.post(
+            f"/invite/accept/{raw_token}",
+            cookies={"user_token": cookie},
+            headers={"Origin": "http://test"},
+            follow_redirects=False,
+        )
+        assert resp_post.status_code == 303
+        assert resp_post.headers["location"] == "/workspace/"
+
+        async with get_session() as session:
+            updated = await get_user_by_id(session, user_id)
+            assert updated.can_host is True
+
+
+@pytest.mark.anyio
+async def test_concurrent_redemption_atomicity(tmp_path):
+    """Two concurrent redemption requests for the same token result in exactly one success and one 400."""
+    db_file = tmp_path / "test_concurrent.db"
+    configure(f"sqlite+aiosqlite:///{db_file}")
+    await init_db()
+    try:
+        async with get_session() as session:
+            user = await create_user(
+                session,
+                email="concurrent_stub@example.com",
+                display_name="Concurrent Stub",
+                password_hash=None,
+                email_verified=False,
+                can_host=False,
+            )
+            raw_token, tok = await create_hosting_invite(session, user.id, 3600)
+            user_id = user.id
+
+        async with client() as http:
+            req1 = http.post(
+                f"/invite/accept/{raw_token}",
+                data={"display_name": "Winner 1", "password": "Password123!", "password_confirm": "Password123!"},
+                headers={"Origin": "http://test"},
+                follow_redirects=False,
+            )
+            req2 = http.post(
+                f"/invite/accept/{raw_token}",
+                data={"display_name": "Winner 2", "password": "Password123!", "password_confirm": "Password123!"},
+                headers={"Origin": "http://test"},
+                follow_redirects=False,
+            )
+            res1, res2 = await asyncio.gather(req1, req2)
+
+            status_codes = sorted([res1.status_code, res2.status_code])
+            assert status_codes == [303, 400]
+
+            err_res = res1 if res1.status_code == 400 else res2
+            assert "invalid or expired invite token" in err_res.text.lower()
+
+            async with get_session() as session:
+                updated = await get_user_by_id(session, user_id)
+                assert updated.can_host is True
+                assert updated.password_hash is not None
+                used_tok = await session.get(AuthToken, tok.id)
+                assert used_tok.is_used is True
+    finally:
+        await dispose()
+        configure("sqlite+aiosqlite://")
+        await init_db()
+
+
+@pytest.mark.anyio
+async def test_anonymous_demo_request_does_not_mutate_existing_user_hosting_requested_at():
+    """An unauthenticated request-demo matching an existing user's email does not mutate their hosting_requested_at flag (CWE-862)."""
+    async with get_session() as session:
+        target = await create_user(
+            session,
+            email="target_user@example.com",
+            display_name="Target User",
+            password_hash=hash_password("password123"),
+            can_host=False,
+        )
+        target_id = target.id
+
+    with patch("portal.routers.public.send_demo_request_email", new_callable=AsyncMock) as mock_send:
+        async with client() as http:
+            res = await http.post(
+                "/api/request-demo",
+                json={
+                    "firstName": "Spoofer",
+                    "lastName": "User",
+                    "email": "target_user@example.com",
+                    "companyName": "Acme",
+                    "notes": "Testing unauthorized bypass",
+                },
+            )
+            assert res.status_code == 200
+            assert res.json()["ok"] is True
+
+            # Verify email sent with source="home"
+            called_info = mock_send.call_args[0][0]
+            assert called_info["source"] == "home"
+
+            # DB flag must NOT have been updated
+            async with get_session() as session:
+                target_check = await get_user_by_id(session, target_id)
+                assert target_check.hosting_requested_at is None
+
+
+@pytest.mark.anyio
+async def test_demo_modal_privacy_checkbox_starts_unchecked_and_is_required():
+    """Verify demo privacy consent checkbox is unchecked by default and marked required."""
+    import re
+
+    async with client() as http:
+        resp_home = await http.get("/")
+        assert resp_home.status_code == 200
+        home_match = re.search(r"<input[^>]*id=[\"']demo-privacy[\"'][^>]*>", resp_home.text)
+        assert home_match is not None, "demo-privacy checkbox not found on home page"
+        tag = home_match.group(0)
+        assert "required" in tag, "demo-privacy checkbox must have required attribute"
+        assert "checked" not in tag, "demo-privacy checkbox must not start checked"
+
+
+@pytest.mark.anyio
+async def test_alembic_028_migration_with_pre_existing_memberships():
+    """Verify migration 028 from a real pre-028 schema with existing memberships.
+
+    Ensures event owners are backfilled with can_host=True while other users remain can_host=False.
+    Also verifies clean downgrade to 027.
+    """
+    import importlib.util
+    import sqlite3
+    import tempfile
+    from pathlib import Path
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import create_engine
+
+    # Load 028 migration module
+    mig_path = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "028_add_can_host_to_users.py"
+    spec = importlib.util.spec_from_file_location("migration_028", mig_path)
+    mig_028 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig_028)
+
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+
+    try:
+        # 1. Create real pre-028 schema (027 state: users has NO can_host/hosting flags)
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email VARCHAR(255) NOT NULL UNIQUE,
+                display_name VARCHAR(255),
+                password_hash VARCHAR(255),
+                email_verified BOOLEAN NOT NULL DEFAULT 0,
+                is_admin BOOLEAN NOT NULL DEFAULT 0,
+                created_at DATETIME
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name VARCHAR(100),
+                display_name VARCHAR(200) NOT NULL,
+                slug VARCHAR(64) NOT NULL UNIQUE,
+                created_at DATETIME
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE event_memberships (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                event_id INTEGER NOT NULL,
+                role VARCHAR(32) NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (event_id) REFERENCES events(id)
+            )
+        """)
+
+        # 2. Insert existing users, event, and memberships
+        cur.execute("INSERT INTO users (id, email) VALUES (1, 'owner@example.com')")
+        cur.execute("INSERT INTO users (id, email) VALUES (2, 'interpreter@example.com')")
+        cur.execute("INSERT INTO users (id, email) VALUES (3, 'regular@example.com')")
+        cur.execute("INSERT INTO events (id, name, display_name, slug) VALUES (1, 'Test Event', 'Test Event', 'test-event')")
+        cur.execute("INSERT INTO event_memberships (user_id, event_id, role) VALUES (1, 1, 'event_owner')")
+        cur.execute("INSERT INTO event_memberships (user_id, event_id, role) VALUES (2, 1, 'interpreter')")
+        conn.commit()
+        conn.close()
+
+        # 3. Run migration 028 upgrade() using Alembic Operations on the SQLite connection
+        engine = create_engine(f"sqlite:///{db_path}")
+        with engine.connect() as sa_conn:
+            ctx = MigrationContext.configure(sa_conn)
+            with Operations.context(ctx):
+                mig_028.upgrade()
+            sa_conn.commit()
+
+        # 4. Verify post-upgrade schema and data
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        columns_post = [row[1] for row in cur.execute("PRAGMA table_info(users)").fetchall()]
+        assert "can_host" in columns_post
+        assert "hosting_requested_at" in columns_post
+        assert "hosting_revoked_at" in columns_post
+
+        # Verify backfill results: user 1 must have can_host=1, others can_host=0
+        users_by_id = {row[0]: row[1] for row in cur.execute("SELECT id, can_host FROM users").fetchall()}
+        assert users_by_id[1] == 1, "Event owner should have can_host=True"
+        assert users_by_id[2] == 0, "Interpreter should have can_host=False"
+        assert users_by_id[3] == 0, "Regular user should have can_host=False"
+        conn.close()
+
+        # 5. Run migration 028 downgrade()
+        with engine.connect() as sa_conn:
+            ctx = MigrationContext.configure(sa_conn)
+            with Operations.context(ctx):
+                mig_028.downgrade()
+            sa_conn.commit()
+
+        # 6. Verify columns are dropped cleanly
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        columns_downgrade = [row[1] for row in cur.execute("PRAGMA table_info(users)").fetchall()]
+        assert "can_host" not in columns_downgrade
+        assert "hosting_requested_at" not in columns_downgrade
+        assert "hosting_revoked_at" not in columns_downgrade
+        conn.close()
+        engine.dispose()
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
 

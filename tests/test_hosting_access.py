@@ -974,6 +974,7 @@ async def test_signed_in_passwordless_user_can_accept_invite():
 async def test_concurrent_redemption_atomicity(tmp_path):
     """Two concurrent redemption requests for the same token result in exactly one success and one 400."""
     db_file = tmp_path / "test_concurrent.db"
+    await dispose()
     configure(f"sqlite+aiosqlite:///{db_file}")
     await init_db()
     try:
@@ -1187,5 +1188,52 @@ async def test_alembic_028_migration_with_pre_existing_memberships():
     finally:
         if os.path.exists(db_path):
             os.unlink(db_path)
+
+
+@pytest.mark.anyio
+async def test_transient_db_lock_during_redemption_returns_503():
+    """Transient SQLite lock conflict when token is not claimed returns 503 instead of 400."""
+    from sqlalchemy.exc import OperationalError
+
+    from portal.models import AuthToken
+
+    async with get_session() as session:
+        user = await create_user(
+            session,
+            email="transient_lock@example.com",
+            display_name="Transient Lock User",
+            password_hash=hash_password("Password123!"),
+            email_verified=True,
+            can_host=False,
+        )
+        raw_token, tok = await create_hosting_invite(session, user.id, 3600)
+        tok_id = tok.id
+
+    with patch("sqlalchemy.ext.asyncio.AsyncSession.flush", side_effect=OperationalError("database is locked", None, Exception("database is locked"))):
+        async with client() as http:
+            resp = await http.post(
+                f"/invite/accept/{raw_token}",
+                data={"password": "Password123!"},
+                headers={"Origin": "http://test"},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 503
+            assert "temporarily unavailable" in resp.text.lower() or "busy" in resp.text.lower()
+
+    # Verify the token remains unused and can subsequently be redeemed successfully
+    async with get_session() as session:
+        token_after = await session.get(AuthToken, tok_id)
+        assert token_after.is_used is False
+
+    async with client() as http:
+        retry_resp = await http.post(
+            f"/invite/accept/{raw_token}",
+            data={"password": "Password123!"},
+            headers={"Origin": "http://test"},
+            follow_redirects=False,
+        )
+        assert retry_resp.status_code == 303
+        assert retry_resp.headers["location"] == "/workspace/"
+
 
 

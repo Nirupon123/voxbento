@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from datetime import datetime, timezone
@@ -953,8 +954,32 @@ async def invite_accept_submit(request: Request, token: str):
     except (OperationalError, DBAPIError) as exc:
         err_msg = str(exc).lower()
         if "busy" in err_msg or "locked" in err_msg or "snapshot" in err_msg:
-            logger.warning("Concurrent redemption conflict on token: %s", exc)
-            raise HTTPException(status_code=400, detail="Invalid or expired invite token.")
+            # Re-read token in a fresh transaction to verify whether it was actually claimed
+            # by a concurrent winner or if this is an unrelated transient SQLite lock.
+            try:
+                for _ in range(5):
+                    async with get_session() as check_session:
+                        tok_check = (
+                            await check_session.execute(
+                                sa.select(AuthToken).where(
+                                    AuthToken.jti == token_digest,
+                                    AuthToken.token_type == TOKEN_TYPE_HOSTING_INVITE,
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if tok_check is not None and (tok_check.used_at is not None or tok_check.is_used):
+                            logger.warning("Concurrent redemption race lost on token: %s", exc)
+                            raise HTTPException(status_code=400, detail="Invalid or expired invite token.")
+                    await asyncio.sleep(0.05)
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+            logger.warning("Transient database lock during token redemption: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Service temporarily unavailable, please retry.",
+            )
         raise
 
     if is_signed_in_as_user:

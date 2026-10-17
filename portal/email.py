@@ -39,10 +39,10 @@ async def _send_email_async(
 ) -> bool:
     if not _mail_config:
         logger.warning(
-            "SMTP is not configured. Would have sent email to %s (subject: %s) with context %r",
+            "SMTP is not configured. Would have sent email to %s (subject: %s, template: %s)",
             email_to,
             subject,
-            template_body,
+            template_name,
         )
         return True
 

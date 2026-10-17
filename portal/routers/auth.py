@@ -973,8 +973,8 @@ async def invite_accept_submit(request: Request, token: str):
                     await asyncio.sleep(0.05)
             except HTTPException:
                 raise
-            except Exception:
-                pass
+            except (OperationalError, DBAPIError) as check_err:
+                logger.debug("Failed to re-check token redemption status after lock contention: %s", check_err)
             logger.warning("Transient database lock during token redemption: %s", exc)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

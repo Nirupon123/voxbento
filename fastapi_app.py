@@ -148,13 +148,38 @@ async def redirect_required_handler(request: Request, exc: RedirectRequired):
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    if "text/html" in request.headers.get("accept", ""):
+    headers = dict(exc.headers) if exc.headers else None
+    location = exc.headers.get("Location") if exc.headers else None
+
+    if location and exc.status_code in (301, 302, 303, 307, 308):
+        from portal.utils import safe_redirect
+
+        return safe_redirect(url=location, status_code=exc.status_code)
+
+    is_api = "/api/" in request.url.path or request.url.path.startswith("/api")
+    if "text/html" in request.headers.get("accept", "") and not is_api:
         detail_msg = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
         if exc.status_code == 400:
             return templates.TemplateResponse(
                 request, "400.html", {"request": request, "detail": detail_msg, "status_code": 400}, status_code=400
             )
-        if exc.status_code == 403:
+        if exc.status_code in (401, 403):
+            import urllib.parse
+
+            from fastapi import status
+
+            from portal.auth import get_current_user
+            from portal.utils import safe_redirect
+
+            if not request.url.path.startswith("/embed/"):
+                user = await get_current_user(request)
+                if not user:
+                    next_url = request.url.path
+                    if request.url.query:
+                        next_url += f"?{request.url.query}"
+                    return safe_redirect(
+                        f"/login?next={urllib.parse.quote(next_url)}", status_code=status.HTTP_303_SEE_OTHER
+                    )
             return templates.TemplateResponse(
                 request, "403.html", {"request": request, "detail": detail_msg}, status_code=403
             )
@@ -173,7 +198,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         return templates.TemplateResponse(
             request, "400.html", {"request": request, "detail": detail_msg, "status_code": exc.status_code}, status_code=exc.status_code
         )
-    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=headers)
 
 
 @app.exception_handler(Exception)

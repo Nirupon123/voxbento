@@ -1091,11 +1091,11 @@ async def test_alembic_028_migration_with_pre_existing_memberships():
     from alembic.operations import Operations
     from sqlalchemy import create_engine
 
-    # Load 028 migration module
-    mig_path = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "028_add_can_host_to_users.py"
-    spec = importlib.util.spec_from_file_location("migration_028", mig_path)
-    mig_028 = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mig_028)
+    # Load 029 migration module
+    mig_path = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "029_add_can_host_to_users.py"
+    spec = importlib.util.spec_from_file_location("migration_029", mig_path)
+    mig_029 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig_029)
 
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -1145,12 +1145,12 @@ async def test_alembic_028_migration_with_pre_existing_memberships():
         conn.commit()
         conn.close()
 
-        # 3. Run migration 028 upgrade() using Alembic Operations on the SQLite connection
+        # 3. Run migration 029 upgrade() using Alembic Operations on the SQLite connection
         engine = create_engine(f"sqlite:///{db_path}")
         with engine.connect() as sa_conn:
             ctx = MigrationContext.configure(sa_conn)
             with Operations.context(ctx):
-                mig_028.upgrade()
+                mig_029.upgrade()
             sa_conn.commit()
 
         # 4. Verify post-upgrade schema and data
@@ -1168,11 +1168,11 @@ async def test_alembic_028_migration_with_pre_existing_memberships():
         assert users_by_id[3] == 0, "Regular user should have can_host=False"
         conn.close()
 
-        # 5. Run migration 028 downgrade()
+        # 5. Run migration 029 downgrade()
         with engine.connect() as sa_conn:
             ctx = MigrationContext.configure(sa_conn)
             with Operations.context(ctx):
-                mig_028.downgrade()
+                mig_029.downgrade()
             sa_conn.commit()
 
         # 6. Verify columns are dropped cleanly

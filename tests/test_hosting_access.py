@@ -291,6 +291,33 @@ async def test_inactive_user_cannot_be_invited_or_redeem():
         assert res_redeem.status_code == 403
         assert "deactivated" in res_redeem.text.lower()
 
+        # Granting hosting to inactive user is blocked -> 400
+        res_grant = await http.post(
+            f"/admin/users/{inactive.id}/hosting",
+            data={"action": "grant"},
+            cookies={"user_token": admin_token},
+            headers={"Origin": "http://test"},
+        )
+        assert res_grant.status_code == 400
+        assert "inactive" in res_grant.text.lower()
+
+        # Revoking hosting from inactive user who has can_host is permitted -> 303
+        async with get_session() as session:
+            await session.execute(
+                User.__table__.update().where(User.id == inactive.id).values(can_host=True)
+            )
+        res_revoke = await http.post(
+            f"/admin/users/{inactive.id}/hosting",
+            data={"action": "revoke"},
+            cookies={"user_token": admin_token},
+            headers={"Origin": "http://test"},
+        )
+        assert res_revoke.status_code == 303
+        async with get_session() as session:
+            rechecked = await get_user_by_id(session, inactive.id)
+            assert rechecked.can_host is False
+            assert rechecked.hosting_revoked_at is not None
+
 
 @pytest.mark.anyio
 async def test_toggle_hosting_on_stub_user_rejected():

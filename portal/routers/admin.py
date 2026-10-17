@@ -1697,7 +1697,7 @@ async def admin_invite_user(request: Request):
         user_email = target_user.email
         has_password = bool(target_user.password_hash)
 
-    invite_url = str(request.base_url).rstrip("/") + f"/invite/accept/{raw_token}"
+    invite_url = f"{settings.public_base_url.rstrip('/')}/invite/accept/{raw_token}"
     await send_hosting_invite_email(user_email, invite_url, is_existing_user=has_password)
     return safe_redirect(url="/admin/users/?success=invite_sent", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -1722,8 +1722,6 @@ async def admin_toggle_user_hosting(request: Request, user_id: int):
             raise HTTPException(status_code=404, detail="User not found.")
         if user.is_admin:
             raise HTTPException(status_code=400, detail="Cannot modify hosting access for administrators.")
-        if not user.is_active:
-            raise HTTPException(status_code=400, detail="Cannot grant hosting access to inactive users.")
 
         if action == "grant":
             new_can_host = True
@@ -1737,6 +1735,9 @@ async def admin_toggle_user_hosting(request: Request, user_id: int):
             new_can_host = not user.can_host
             user.hosting_revoked_at = None if new_can_host else utc_now()
             user.hosting_requested_at = None
+
+        if new_can_host and not user.is_active:
+            raise HTTPException(status_code=400, detail="Cannot grant hosting access to inactive users.")
 
         if new_can_host and not user.password_hash:
             raise HTTPException(status_code=400, detail="Stub users cannot be granted hosting directly. Send an invitation instead.")
@@ -1767,7 +1768,7 @@ async def admin_toggle_user_hosting(request: Request, user_id: int):
         user_email = user.email
 
     if new_can_host:
-        login_url = str(request.base_url).rstrip("/") + "/workspace/"
+        login_url = f"{settings.public_base_url.rstrip('/')}/workspace/"
         await send_hosting_granted_email(user_email, login_url)
 
     referrer = request.headers.get("referer", "")
@@ -1825,7 +1826,7 @@ async def admin_resend_invite(request: Request, token_id: int):
             expires_in_seconds=7 * 86400,
         )
 
-    invite_url = str(request.base_url).rstrip("/") + f"/invite/accept/{raw_token}"
+    invite_url = f"{settings.public_base_url.rstrip('/')}/invite/accept/{raw_token}"
     await send_hosting_invite_email(user_email, invite_url, is_existing_user=has_password)
     return safe_redirect(url="/admin/users/?success=invite_resent", status_code=status.HTTP_303_SEE_OTHER)
 

@@ -1046,3 +1046,131 @@ class TestHomePageAuthLinks:
             resp = await c.get("/", cookies={"user_token": token})
         assert resp.status_code == 200
         assert b"Logout" in resp.content
+
+
+# ---------------------------------------------------------------------------
+# Magic link authentication & cross-browser isolation
+# ---------------------------------------------------------------------------
+
+
+class TestMagicLinkAuthentication:
+    @pytest.mark.anyio
+    async def test_magic_link_request_returns_ok_without_poll_id_or_verifier_cookie(self, setup_db):
+        user = await _create_test_user(email="magic-user@example.com")
+        async with _client() as c:
+            resp = await c.post("/api/auth/magic-link", json={"email": user.email})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data == {"status": "ok"}
+        assert "poll_id" not in data
+        assert "poll_verifier" not in c.cookies
+        assert "user_token" not in c.cookies
+
+    @pytest.mark.anyio
+    async def test_magic_poll_endpoint_is_removed(self, setup_db):
+        async with _client() as c:
+            resp = await c.get("/api/auth/magic-poll")
+        assert resp.status_code == 404
+
+    @pytest.mark.anyio
+    async def test_magic_link_opened_in_separate_session_does_not_sign_in_requester(self, setup_db):
+        from sqlalchemy import select
+
+        from portal.database import get_session
+        from portal.models import AuthToken
+
+        user = await _create_test_user(email="requester@example.com")
+
+        # Session A: The browser / session that requests the magic link
+        async with _client() as requester_client:
+            req_res = await requester_client.post("/api/auth/magic-link", json={"email": user.email})
+            assert req_res.status_code == 200
+            assert req_res.json() == {"status": "ok"}
+            assert "user_token" not in requester_client.cookies
+            assert "poll_verifier" not in requester_client.cookies
+
+            # Retrieve the magic link token created in the DB
+            async with get_session() as s:
+                tok = (await s.execute(select(AuthToken).where(AuthToken.user_id == user.id))).scalars().first()
+                assert tok is not None
+                magic_token = tok.jti
+
+            # Session B: A completely separate browser / session that opens the magic link
+            async with _client() as opener_client:
+                open_res = await opener_client.get(f"/auth/magic/{magic_token}", follow_redirects=False)
+                assert open_res.status_code == 303
+                assert "/account?auth_sync=1" in open_res.headers.get("location", "")
+                assert "user_token" in opener_client.cookies
+
+                # Session B is signed in
+                status_res_b = await opener_client.get("/api/auth/status")
+                assert status_res_b.status_code == 200
+                assert status_res_b.json()["authenticated"] is True
+                assert status_res_b.json()["email"] == user.email
+
+            # Session A (requester) must NOT be signed in
+            assert "user_token" not in requester_client.cookies
+            status_res_a = await requester_client.get("/api/auth/status")
+            assert status_res_a.status_code == 200
+            assert status_res_a.json()["authenticated"] is False
+
+            # Session A cannot access protected routes
+            account_res_a = await requester_client.get("/account", follow_redirects=False)
+            assert account_res_a.status_code in (302, 303, 307)
+            assert "/login" in account_res_a.headers.get("location", "")
+
+    @pytest.mark.anyio
+    async def test_magic_link_oauth_flow_renders_magic_success(self, setup_db):
+        from sqlalchemy import select
+
+        from portal.database import get_session
+        from portal.models import AuthToken
+
+        user = await _create_test_user(email="oauth-user@example.com")
+        next_oauth = "/oauth/authorize?client_id=test_client&event=test_event"
+
+        async with _client() as requester_client:
+            await requester_client.post("/api/auth/magic-link", json={"email": user.email, "next_url": next_oauth})
+
+        async with get_session() as s:
+            tok = (await s.execute(select(AuthToken).where(AuthToken.user_id == user.id))).scalars().first()
+            assert tok is not None
+            magic_token = tok.jti
+
+        async with _client() as opener_client:
+            res = await opener_client.get(f"/auth/magic/{magic_token}?next={next_oauth}", follow_redirects=False)
+            assert res.status_code == 200
+            assert b"Successfully Signed In" in res.content
+            assert b"voxbento_auth" in res.content
+            assert "user_token" in opener_client.cookies
+
+    @pytest.mark.anyio
+    async def test_login_page_renders_notice_and_no_polling(self, setup_db):
+        import re
+
+        async with _client() as c:
+            resp = await c.get("/login")
+        assert resp.status_code == 200
+        content = resp.text
+        # Acceptance criteria checks:
+        assert "/api/auth/magic-poll" not in content
+        assert "startMagicPoll" not in content
+        assert "voxbento_auth" in content
+        text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", content))
+        assert "Signed in on another device or browser. Open VoxBento there, or request a new link here." in text
+        assert "Signed in on another device or browser. Open VoxBento there, or" in content
+        assert "request a new link here" in content
+
+    @pytest.mark.anyio
+    async def test_base_html_renders_auth_sync_script_when_query_param_present(self, setup_db):
+        user = await _create_test_user()
+        token = create_user_token(user_id=user.id, email=user.email, is_admin=user.is_admin)
+        async with _client() as c:
+            resp_sync = await c.get("/account?auth_sync=1", cookies={"user_token": token})
+            assert resp_sync.status_code == 200
+            assert "voxbento_auth" in resp_sync.text
+            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_sync.text
+
+            resp_normal = await c.get("/account", cookies={"user_token": token})
+            assert resp_normal.status_code == 200
+            assert "cleanUrl.searchParams.delete('auth_sync')" not in resp_normal.text

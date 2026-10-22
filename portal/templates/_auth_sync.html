@@ -1,5 +1,6 @@
 {% if request and request.query_params and request.query_params.get('auth_sync') %}
 <script>
+  {% if current_user or user or user_menu or is_admin %}
   if (typeof BroadcastChannel !== 'undefined') {
     try {
       const authChannel = new BroadcastChannel('voxbento_auth');
@@ -7,6 +8,7 @@
       authChannel.close();
     } catch (e) {}
   }
+  {% endif %}
   try {
     const cleanUrl = new URL(window.location.href);
     cleanUrl.searchParams.delete('auth_sync');

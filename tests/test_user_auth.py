@@ -1205,15 +1205,27 @@ class TestMagicLinkAuthentication:
             assert "cleanUrl.searchParams.delete('auth_sync')" not in resp_admin_normal.text
 
             # standalone templates (e.g. / and /local)
-            resp_home_sync = await c.get("/?auth_sync=1")
-            assert resp_home_sync.status_code == 200
-            assert "voxbento_auth" in resp_home_sync.text
-            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_home_sync.text
+            # Unauthenticated public request with auth_sync=1 cleans URL but does NOT broadcast
+            resp_home_unauth = await c.get("/?auth_sync=1")
+            assert resp_home_unauth.status_code == 200
+            assert "voxbento_auth" not in resp_home_unauth.text
+            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_home_unauth.text
 
-            resp_local_sync = await c.get("/local?auth_sync=1")
-            assert resp_local_sync.status_code == 200
-            assert "voxbento_auth" in resp_local_sync.text
-            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_local_sync.text
+            resp_local_unauth = await c.get("/local?auth_sync=1")
+            assert resp_local_unauth.status_code == 200
+            assert "voxbento_auth" not in resp_local_unauth.text
+            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_local_unauth.text
+
+            # Authenticated request with auth_sync=1 broadcasts logged_in and cleans URL
+            resp_home_auth = await c.get("/?auth_sync=1", cookies={"user_token": token})
+            assert resp_home_auth.status_code == 200
+            assert "voxbento_auth" in resp_home_auth.text
+            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_home_auth.text
+
+            resp_local_auth = await c.get("/local?auth_sync=1", cookies={"user_token": token})
+            assert resp_local_auth.status_code == 200
+            assert "voxbento_auth" in resp_local_auth.text
+            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_local_auth.text
 
     @pytest.mark.anyio
     async def test_magic_link_redirect_places_auth_sync_in_query_before_fragment(self, setup_db):

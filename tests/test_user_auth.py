@@ -45,7 +45,7 @@ def _client():
 
     from fastapi_app import app
 
-    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    return AsyncClient(transport=ASGITransport(app=app), base_url="https://test")
 
 
 async def _create_test_user(email="test@example.com", display_name="Test User", password="securepass123"):
@@ -1203,6 +1203,17 @@ class TestMagicLinkAuthentication:
             resp_admin_normal = await c.get("/workspace/", cookies={"user_token": token})
             assert resp_admin_normal.status_code == 200
             assert "cleanUrl.searchParams.delete('auth_sync')" not in resp_admin_normal.text
+
+            # standalone templates (e.g. / and /local)
+            resp_home_sync = await c.get("/?auth_sync=1")
+            assert resp_home_sync.status_code == 200
+            assert "voxbento_auth" in resp_home_sync.text
+            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_home_sync.text
+
+            resp_local_sync = await c.get("/local?auth_sync=1")
+            assert resp_local_sync.status_code == 200
+            assert "voxbento_auth" in resp_local_sync.text
+            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_local_sync.text
 
     @pytest.mark.anyio
     async def test_magic_link_redirect_places_auth_sync_in_query_before_fragment(self, setup_db):

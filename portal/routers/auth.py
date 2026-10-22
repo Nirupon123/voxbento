@@ -7,6 +7,7 @@ import re
 import secrets
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import jwt
 import sqlalchemy as sa
@@ -424,8 +425,6 @@ async def redeem_magic_link(request: Request, token: str, background_tasks: Back
                 user_id=user.id, email=user.email, display_name=user.display_name, is_admin=user.is_admin
             )
 
-            from urllib.parse import urlparse
-
             def _is_local_oauth_path(u: str | None) -> bool:
                 if not u or not isinstance(u, str):
                     return False
@@ -447,8 +446,10 @@ async def redeem_magic_link(request: Request, token: str, background_tasks: Back
                     if next and next.startswith("/") and not next.startswith("//") and not urlparse(next).netloc
                     else "/account"
                 )
-                sep = "&" if "?" in redirect_to else "?"
-                redirect_to_sync = f"{redirect_to}{sep}auth_sync=1"
+                parsed = urlparse(redirect_to)
+                q_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+                q_pairs.append(("auth_sync", "1"))
+                redirect_to_sync = urlunparse(parsed._replace(query=urlencode(q_pairs)))
                 response = safe_redirect(url=redirect_to_sync, status_code=status.HTTP_303_SEE_OTHER)
 
             response.set_cookie(

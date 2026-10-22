@@ -1120,25 +1120,43 @@ class TestMagicLinkAuthentication:
             assert "/login" in account_res_a.headers.get("location", "")
 
     @pytest.mark.anyio
-    async def test_magic_link_oauth_flow_renders_magic_success(self, setup_db):
-        from sqlalchemy import select
+    async def test_magic_link_oauth_flow_renders_magic_success(self, setup_db, monkeypatch):
+        from urllib.parse import parse_qs, urlparse
 
-        from portal.database import get_session
-        from portal.models import AuthToken
+        import portal.email
+
+        captured_links: list[str] = []
+
+        async def fake_send_email_async(email_to: str, subject: str, template_name: str, template_body: dict):
+            if "magic_link" in template_body:
+                captured_links.append(template_body["magic_link"])
+            return True
+
+        monkeypatch.setattr(portal.email, "_send_email_async", fake_send_email_async)
 
         user = await _create_test_user(email="oauth-user@example.com")
         next_oauth = "/oauth/authorize?client_id=test_client&event=test_event"
 
         async with _client() as requester_client:
-            await requester_client.post("/api/auth/magic-link", json={"email": user.email, "next_url": next_oauth})
+            req_res = await requester_client.post(
+                "/api/auth/magic-link", json={"email": user.email, "next_url": next_oauth}
+            )
+            assert req_res.status_code == 200
 
-        async with get_session() as s:
-            tok = (await s.execute(select(AuthToken).where(AuthToken.user_id == user.id))).scalars().first()
-            assert tok is not None
-            magic_token = tok.jti
+        assert len(captured_links) == 1
+        magic_link = captured_links[0]
+
+        # Verify the generated magic link retains the OAuth continuation target
+        parsed_url = urlparse(magic_link)
+        query_params = parse_qs(parsed_url.query)
+        assert "next" in query_params
+        assert query_params["next"][0] == next_oauth
+
+        # Redeem the actual link that was generated and sent in the email
+        redemption_target = parsed_url.path + (f"?{parsed_url.query}" if parsed_url.query else "")
 
         async with _client() as opener_client:
-            res = await opener_client.get(f"/auth/magic/{magic_token}?next={next_oauth}", follow_redirects=False)
+            res = await opener_client.get(redemption_target, follow_redirects=False)
             assert res.status_code == 200
             assert b"Successfully Signed In" in res.content
             assert b"voxbento_auth" in res.content
@@ -1157,15 +1175,16 @@ class TestMagicLinkAuthentication:
         assert "startMagicPoll" not in content
         assert "voxbento_auth" in content
         text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", content))
-        assert "Signed in on another device or browser. Open VoxBento there, or request a new link here." in text
-        assert "Signed in on another device or browser. Open VoxBento there, or" in content
+        assert "If you sign in on another device or browser, open VoxBento there, or request a new link here." in text
+        assert "If you sign in on another device or browser, open VoxBento there, or" in content
         assert "request a new link here" in content
 
     @pytest.mark.anyio
-    async def test_base_html_renders_auth_sync_script_when_query_param_present(self, setup_db):
+    async def test_base_and_admin_templates_render_auth_sync_script_when_query_param_present(self, setup_db):
         user = await _create_test_user()
         token = create_user_token(user_id=user.id, email=user.email, is_admin=user.is_admin)
         async with _client() as c:
+            # base.html (e.g. /account)
             resp_sync = await c.get("/account?auth_sync=1", cookies={"user_token": token})
             assert resp_sync.status_code == 200
             assert "voxbento_auth" in resp_sync.text
@@ -1174,3 +1193,37 @@ class TestMagicLinkAuthentication:
             resp_normal = await c.get("/account", cookies={"user_token": token})
             assert resp_normal.status_code == 200
             assert "cleanUrl.searchParams.delete('auth_sync')" not in resp_normal.text
+
+            # admin/base.html (e.g. /workspace/)
+            resp_admin_sync = await c.get("/workspace/?auth_sync=1", cookies={"user_token": token})
+            assert resp_admin_sync.status_code == 200
+            assert "voxbento_auth" in resp_admin_sync.text
+            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_admin_sync.text
+
+            resp_admin_normal = await c.get("/workspace/", cookies={"user_token": token})
+            assert resp_admin_normal.status_code == 200
+            assert "cleanUrl.searchParams.delete('auth_sync')" not in resp_admin_normal.text
+
+    @pytest.mark.anyio
+    async def test_magic_link_redirect_places_auth_sync_in_query_before_fragment(self, setup_db):
+        import secrets
+        from urllib.parse import quote
+
+        from portal.database import create_auth_token, get_session
+
+        user = await _create_test_user()
+        test_cases = [
+            ("/account#billing", "/account?auth_sync=1#billing"),
+            ("/workspace/?tab=events#section", "/workspace/?tab=events&auth_sync=1#section"),
+            ("/account#section?foo=bar", "/account?auth_sync=1#section?foo=bar"),
+        ]
+
+        for next_url, expected_redirect in test_cases:
+            token_val = secrets.token_hex(32)
+            async with get_session() as s:
+                await create_auth_token(s, jti=token_val, user_id=user.id, token_type="magic_link")
+
+            async with _client() as c:
+                res = await c.get(f"/auth/magic/{token_val}?next={quote(next_url)}", follow_redirects=False)
+                assert res.status_code == 303
+                assert res.headers.get("location") == expected_redirect

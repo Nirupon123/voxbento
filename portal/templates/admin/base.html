@@ -62,5 +62,21 @@
 
     <script type="module" src="{{ url_for('static', path='js/admin.js') }}?v={{ asset_version }}"></script>
     <script type="module" src="{{ url_for('static', path='js/user-menu.js') }}?v={{ asset_version }}"></script>
+    {% if request and request.query_params and request.query_params.get('auth_sync') %}
+    <script>
+      if (typeof BroadcastChannel !== 'undefined') {
+        try {
+          const authChannel = new BroadcastChannel('voxbento_auth');
+          authChannel.postMessage('logged_in');
+          authChannel.close();
+        } catch (e) {}
+      }
+      try {
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('auth_sync');
+        window.history.replaceState({}, document.title, cleanUrl.pathname + (cleanUrl.search ? cleanUrl.search : '') + cleanUrl.hash);
+      } catch (e) {}
+    </script>
+    {% endif %}
   </body>
 </html>

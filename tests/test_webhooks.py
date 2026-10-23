@@ -320,3 +320,154 @@ async def test_atomic_queue_claim(db):
     ids1 = {d.id for d in claimed1}
     ids2 = {d.id for d in claimed2}
     assert ids1.isdisjoint(ids2)
+
+
+@pytest.mark.anyio
+async def test_create_webhook_idempotency_and_deduplication(db, monkeypatch):
+    from portal.models import DeveloperAccount, Event, OAuthClient, OAuthToken, User
+    from portal.routers.webhooks import WebhookCreate, create_webhook
+
+    monkeypatch.setattr("portal.routers.webhooks.validate_ssrf", lambda url: None)
+
+    user = User(email="dev@example.com", display_name="Dev User", is_active=True)
+    db.add(user)
+    await db.flush()
+
+    event = Event(slug="dev-event", display_name="Dev Event")
+    db.add(event)
+    await db.flush()
+
+    dev_account = DeveloperAccount(user_id=user.id, status="approved")
+    db.add(dev_account)
+    await db.flush()
+
+    client = OAuthClient(
+        developer_account_id=dev_account.id,
+        client_id="client_test_123",
+        name="Test App",
+    )
+    db.add(client)
+    await db.flush()
+
+    token = OAuthToken(
+        client_id=client.id,
+        user_id=user.id,
+        event_id=event.id,
+        scopes=["webhooks:manage"],
+        access_token_hash="hash123",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    db.add(token)
+    await db.flush()
+
+    # 1. Create first webhook subscription
+    req1 = WebhookCreate(
+        target_url="https://client.example.com/webhook/",
+        event_types=["booth.transcription.started"],
+    )
+    res1 = await create_webhook(req1, token=token, db=db)
+    assert res1.id is not None
+    assert res1.target_url == req1.target_url
+    assert res1.event_types == ["booth.transcription.started"]
+    assert res1.secret_key.startswith("whsec_")
+    orig_id = res1.id
+    orig_secret = res1.secret_key
+
+    # 2. Call again with same target_url but updated event_types
+    req2 = WebhookCreate(
+        target_url="https://client.example.com/webhook/",
+        event_types=["booth.transcription.started", "booth.transcription.stopped"],
+    )
+    res2 = await create_webhook(req2, token=token, db=db)
+    assert res2.id == orig_id
+    assert res2.secret_key == orig_secret
+    assert set(res2.event_types) == {"booth.transcription.started", "booth.transcription.stopped"}
+
+    # Verify only 1 row exists in DB
+    all_subs = (await db.execute(select(WebhookSubscription))).scalars().all()
+    assert len(all_subs) == 1
+
+    # 3. Simulate legacy duplicate rows in DB (e.g. from prior bug)
+    dup = WebhookSubscription(
+        developer_account_id=dev_account.id,
+        target_url="https://client.example.com/webhook/",
+        event_types=["booth.transcription.started"],
+        secret_key="whsec_duplicate",
+        is_active=True,
+    )
+    db.add(dup)
+    await db.flush()
+    assert len((await db.execute(select(WebhookSubscription))).scalars().all()) == 2
+
+    # Call create_webhook again — it should prune the duplicate!
+    res3 = await create_webhook(req2, token=token, db=db)
+    assert res3.id == orig_id
+    subs_after_prune = (await db.execute(select(WebhookSubscription))).scalars().all()
+    assert len(subs_after_prune) == 1
+    assert subs_after_prune[0].id == orig_id
+
+
+@pytest.mark.anyio
+async def test_create_webhook_quota_limit(db, monkeypatch):
+    from portal.config import settings
+    from portal.models import DeveloperAccount, Event, OAuthClient, OAuthToken, User
+    from portal.routers.webhooks import WebhookCreate, create_webhook
+
+    monkeypatch.setattr("portal.routers.webhooks.validate_ssrf", lambda url: None)
+    monkeypatch.setattr(settings, "max_webhook_subscriptions", 3)
+
+    user = User(email="quota@example.com", display_name="Quota User", is_active=True)
+    db.add(user)
+    await db.flush()
+
+    event = Event(slug="quota-event", display_name="Quota Event")
+    db.add(event)
+    await db.flush()
+
+    dev_account = DeveloperAccount(user_id=user.id, status="approved")
+    db.add(dev_account)
+    await db.flush()
+
+    client = OAuthClient(
+        developer_account_id=dev_account.id,
+        client_id="client_quota_123",
+        name="Quota App",
+    )
+    db.add(client)
+    await db.flush()
+
+    token = OAuthToken(
+        client_id=client.id,
+        user_id=user.id,
+        event_id=event.id,
+        scopes=["webhooks:manage"],
+        access_token_hash="hash123",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    db.add(token)
+    await db.flush()
+
+    for i in range(3):
+        await create_webhook(
+            WebhookCreate(target_url=f"https://example.com/wh/{i}", event_types=["test"]),
+            token=token,
+            db=db,
+        )
+
+    # Calling with a 4th distinct target URL should raise 429
+    with pytest.raises(HTTPException) as exc_info:
+        await create_webhook(
+            WebhookCreate(target_url="https://example.com/wh/4", event_types=["test"]),
+            token=token,
+            db=db,
+        )
+    assert exc_info.value.status_code == 429
+
+    # But re-subscribing to an EXISTING URL should still succeed (idempotent)!
+    res_existing = await create_webhook(
+        WebhookCreate(target_url="https://example.com/wh/1", event_types=["test", "extra"]),
+        token=token,
+        db=db,
+    )
+    assert res_existing.target_url == "https://example.com/wh/1"
+

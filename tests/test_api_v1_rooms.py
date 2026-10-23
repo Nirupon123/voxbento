@@ -64,7 +64,7 @@ async def _seed():
                 client_id=client.id,
                 user_id=user.id,
                 event_id=event.id,
-                scopes=["rooms:write"],
+                scopes=["rooms:write", "booths:read", "listeners:provision"],
                 access_token_hash=hashlib.sha256(ACCESS_TOKEN.encode()).hexdigest(),
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
             )
@@ -227,3 +227,48 @@ async def test_invalid_values_are_rejected(payload):
         )
 
     assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_room_endpoints_resolve_by_eventyay_room_id():
+    """Eventyay routes specify eventyay_room_id (e.g. '24'), not internal primary key."""
+    event = await _seed()
+
+    async with _client() as c:
+        # Create a room with eventyay_room_id="24"
+        created = await c.put(
+            f"/api/v1/events/{event.slug}/rooms/24",
+            json={"name": "Main Stage", "target_languages": ["fr", "es"]},
+            headers=_auth(),
+        )
+        assert created.status_code == 200
+        internal_room_id = created.json()["room_id"]
+        # Verify internal room ID is numeric and different from string '24' if autoincrement started at 1
+        assert isinstance(internal_room_id, int)
+
+        # 1. Fetch listener token using Eventyay room ID "24"
+        token_resp = await c.post(
+            f"/api/v1/events/{event.slug}/rooms/24/listener-token",
+            headers=_auth(),
+        )
+        assert token_resp.status_code == 200
+        data = token_resp.json()
+        assert "listener_token" in data and len(data["listener_token"]) > 20
+
+        # 2. List booths using Eventyay room ID "24"
+        booths_resp = await c.get(
+            f"/api/v1/events/{event.slug}/rooms/24/booths",
+            headers=_auth(),
+        )
+        assert booths_resp.status_code == 200
+        booths_data = booths_resp.json()
+        assert len(booths_data) == 2
+        assert {b["language_code"] for b in booths_data} == {"fr", "es"}
+
+        # 3. Both endpoints also work with internal numeric room ID
+        token_resp_internal = await c.post(
+            f"/api/v1/events/{event.slug}/rooms/{internal_room_id}/listener-token",
+            headers=_auth(),
+        )
+        assert token_resp_internal.status_code == 200
+

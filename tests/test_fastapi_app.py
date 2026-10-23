@@ -212,7 +212,7 @@ def test_make_jitsi_url_full_url_unchanged():
     """A full URL stored in DEFAULT_JITSI_ROOM must not be double-prefixed."""
     from portal.utils import _make_jitsi_url
 
-    full = "https://meet.jit.si/eventyay-stage-room"
+    full = "https://meet.jit.si/test-stage-room"
     assert _make_jitsi_url("http://localhost:8080", full) == full
 
 
@@ -2079,13 +2079,13 @@ def test_embed_frame_ancestors_restricted(monkeypatch):
     """When EMBED_ALLOWED_ORIGINS is set to one origin, CSP must reflect it exactly."""
     from portal.config import settings
 
-    monkeypatch.setattr(settings, "embed_allowed_origins", "https://eventyay.com")
+    monkeypatch.setattr(settings, "embed_allowed_origins", "https://partner.example.com")
     _seed_embed_event("test-event", "en")
 
     token = _embed_listener_token(event_slug="test-event")
     res = client.get(f"/embed/test-event/en?token={token}", headers={"accept": "text/html"})
     assert res.status_code == 200, res.text
-    assert res.headers.get("content-security-policy") == "frame-ancestors https://eventyay.com"
+    assert res.headers.get("content-security-policy") == "frame-ancestors https://partner.example.com"
 
 
 def test_embed_frame_ancestors_multi_origin(monkeypatch):
@@ -2128,13 +2128,13 @@ def test_embed_postmessage_target_origin_single(monkeypatch):
     """When one origin is configured, target_origin matches it exactly."""
     from portal.config import settings
 
-    monkeypatch.setattr(settings, "embed_allowed_origins", "https://eventyay.com")
+    monkeypatch.setattr(settings, "embed_allowed_origins", "https://partner.example.com")
     _seed_embed_event("test-event", "en")
 
     token = _embed_listener_token(event_slug="test-event")
     res = client.get(f"/embed/test-event/en?token={token}", headers={"accept": "text/html"})
-    assert '"target_origin": "https://eventyay.com"' in res.text
-    assert '"allowed_origins": ["https://eventyay.com"]' in res.text
+    assert '"target_origin": "https://partner.example.com"' in res.text
+    assert '"allowed_origins": ["https://partner.example.com"]' in res.text
 
 
 def test_embed_postmessage_target_origin_multi(monkeypatch):
@@ -2184,6 +2184,31 @@ def test_embed_captions_opt_in_websocket_auth():
     # Verify the booth_id produced by make_booth_id satisfies the startswith check.
     booth_id = "test-event-1-en"  # make_booth_id("test-event", 1, 1,  "en")
     assert booth_id.startswith(f"{payload['event_slug']}-")
+
+
+def test_ws_captions_allows_anonymous():
+    """Anonymous connection to captions websocket is permitted for public subtitle streaming."""
+    with client.websocket_connect("/ws/captions/test-event-1-en"):
+        # Connected successfully without 403 / 4001
+        pass
+
+
+def test_ws_captions_rejects_invalid_token():
+    """Invalid token provided to captions websocket is rejected."""
+    from fastapi.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect("/ws/captions/test-event-1-en?token=invalid.jwt.token"):
+            pass
+    assert exc_info.value.code == 4001
+
+
+def test_ws_captions_allows_cross_origin_with_ambient_cookies():
+    """Cross-origin connection from an external client with ambient cookies must not fail origin checks."""
+    headers = {"origin": "https://external-client.example.org"}
+    cookies = {"user_token": "some-ambient-cookie"}
+    with client.websocket_connect("/ws/captions/test-event-1-en", headers=headers, cookies=cookies):
+        pass
 
 
 # ── TTS WebSocket Auth tests ──────────────────────────────────────────────────
@@ -2715,11 +2740,11 @@ def test_build_embed_frame_policy_variants(monkeypatch):
     monkeypatch.setattr(settings, "embed_allowed_origins", "")
     assert _build_embed_frame_policy() == ("frame-ancestors *", [], "*")
 
-    monkeypatch.setattr(settings, "embed_allowed_origins", "https://eventyay.com")
+    monkeypatch.setattr(settings, "embed_allowed_origins", "https://partner.example.com")
     assert _build_embed_frame_policy() == (
-        "frame-ancestors https://eventyay.com",
-        ["https://eventyay.com"],
-        "https://eventyay.com",
+        "frame-ancestors https://partner.example.com",
+        ["https://partner.example.com"],
+        "https://partner.example.com",
     )
 
     monkeypatch.setattr(settings, "embed_allowed_origins", "https://a.com, https://b.com")

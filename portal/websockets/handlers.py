@@ -5,7 +5,14 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from portal.auth import WSAuthError, booth_session_key, is_listener_token, resolve_booth_role, resolve_ws_auth
+from portal.auth import (
+    WSAuthError,
+    booth_session_key,
+    decode_token,
+    is_listener_token,
+    resolve_booth_role,
+    resolve_ws_auth,
+)
 from portal.globals import booths
 from portal.websockets.manager import (
     Session,
@@ -115,10 +122,20 @@ async def ws_booth(websocket: WebSocket, booth_id: str) -> None:
 @router.websocket("/ws/captions/{booth_id}")
 async def ws_captions(websocket: WebSocket, booth_id: str) -> None:
     """WebSocket endpoint for live captions. Listener tokens are limited to their own event"""
-    try:
-        await resolve_ws_auth(websocket, booth_id)
-    except WSAuthError:
-        return
+    token = websocket.query_params.get("token", "")
+    if token:
+        try:
+            payload = decode_token(token)
+            if not (payload.get("is_admin") or payload.get("admin")):
+                token_event = payload.get("event_slug", "")
+                if not token_event or not (
+                    booth_id.startswith(f"{token_event}-") or booth_id.startswith(f"{token_event}/")
+                ):
+                    await websocket.close(code=4003)
+                    return
+        except Exception:
+            await websocket.close(code=4001)
+            return
     await websocket.accept()
     listener_manager.add(websocket, booth_id)
     try:

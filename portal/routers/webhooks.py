@@ -74,10 +74,60 @@ async def create_webhook(
     if not client:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid client")
 
-    count_result = await db.execute(
-        select(WebhookSubscription).where(WebhookSubscription.developer_account_id == client.developer_account_id)
+    # Idempotency Check: if a subscription with the same target_url already exists
+    # for this developer account, update and reactivate it rather than creating duplicates.
+    existing_subs_result = await db.execute(
+        select(WebhookSubscription)
+        .where(
+            WebhookSubscription.developer_account_id == client.developer_account_id,
+            WebhookSubscription.target_url == data.target_url,
+        )
+        .order_by(WebhookSubscription.id.asc())
     )
-    if len(count_result.scalars().all()) >= 5:
+    existing_subs = existing_subs_result.scalars().all()
+
+    if existing_subs:
+        sub = existing_subs[0]
+        sub.event_types = sorted(set(data.event_types))
+        sub.is_active = True
+        sub.consecutive_failures = 0
+        if not sub.secret_key:
+            sub.secret_key = f"whsec_{secrets.token_urlsafe(32)}"
+
+        # Prune any duplicate subscriptions for this exact target_url
+        for duplicate in existing_subs[1:]:
+            await db.delete(duplicate)
+
+        audit = OAuthAuditLog(
+            token_id=token.id,
+            client_id=client.id,
+            action="webhook.updated",
+            request_path="/api/v1/webhooks",
+            status_code=status.HTTP_200_OK,
+        )
+        db.add(audit)
+        await db.flush()
+
+        return WebhookResponse(
+            id=sub.id,
+            target_url=sub.target_url,
+            event_types=sub.event_types,
+            is_active=sub.is_active,
+            secret_key=sub.secret_key,
+        )
+
+    # Quota Check for newly created webhook subscriptions
+    from portal.config import settings
+
+    count_result = await db.execute(
+        select(WebhookSubscription).where(
+            WebhookSubscription.developer_account_id == client.developer_account_id,
+            WebhookSubscription.is_active.is_(True),
+        )
+    )
+    active_subs = count_result.scalars().all()
+    max_subs = getattr(settings, "max_webhook_subscriptions", 50)
+    if len(active_subs) >= max_subs:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Maximum webhook subscriptions reached"
         )

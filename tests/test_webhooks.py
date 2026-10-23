@@ -513,3 +513,33 @@ async def test_create_webhook_quota_limit(db, monkeypatch):
         )
     assert exc_info.value.status_code == 429
 
+    # But if one of the active subscriptions is a duplicate of the same URL,
+    # reactivating the canonical sub will prune the duplicate, keeping total active count within quota.
+    # Add an active duplicate of https://example.com/wh/1:
+    dup_sub = WebhookSubscription(
+        developer_account_id=client.developer_account_id,
+        target_url="https://example.com/wh/1",
+        event_types=["test"],
+        secret_key="whsec_duplicate",
+        is_active=True,
+    )
+    db.add(dup_sub)
+    await db.flush()
+
+    # Now active subs = 4 (wh/2, wh/3, wh/filler, wh/1-dup).
+    # Deactivate wh/filler so active subs = 3 (quota limit of 3 is reached).
+    filler_sub = (await db.execute(select(WebhookSubscription).where(WebhookSubscription.target_url == "https://example.com/wh/filler"))).scalars().first()
+    filler_sub.is_active = False
+    await db.flush()
+
+    # Total active subs is 3 (wh/2, wh/3, and wh/1-dup).
+    # Calling create_webhook for wh/1 should SUCCEED because pruning wh/1-dup keeps projected count at 3.
+    res_reactivated = await create_webhook(
+        WebhookCreate(target_url="https://example.com/wh/1", event_types=["test"]),
+        token=token,
+        db=db,
+    )
+    assert res_reactivated.target_url == "https://example.com/wh/1"
+    assert res_reactivated.is_active is True
+
+

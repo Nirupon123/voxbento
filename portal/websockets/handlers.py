@@ -123,6 +123,7 @@ async def ws_booth(websocket: WebSocket, booth_id: str) -> None:
 async def ws_captions(websocket: WebSocket, booth_id: str) -> None:
     """WebSocket endpoint for live captions. Listener tokens are limited to their own event"""
     token = websocket.query_params.get("token", "")
+    is_anonymous = not bool(token)
     if token:
         try:
             payload = decode_token(token)
@@ -149,12 +150,18 @@ async def ws_captions(websocket: WebSocket, booth_id: str) -> None:
         from portal.config import settings
 
         max_anon = getattr(settings, "max_anonymous_caption_listeners_per_booth", 500)
-        current_count = len(listener_manager._rooms.get(booth_id, set()))
-        if current_count >= max_anon:
+        if not listener_manager.try_reserve_anonymous(websocket, booth_id, max_anon):
             await websocket.close(code=1008)
             return
-    await websocket.accept()
-    listener_manager.add(websocket, booth_id)
+
+    try:
+        await websocket.accept()
+    except Exception:
+        if is_anonymous:
+            listener_manager.cancel_reservation(websocket, booth_id)
+        raise
+
+    listener_manager.add(websocket, booth_id, is_anonymous=is_anonymous)
     try:
         while True:
             await websocket.receive_text()

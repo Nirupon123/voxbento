@@ -2230,19 +2230,25 @@ def test_ws_captions_allows_cross_origin_with_ambient_cookies():
 
 
 def test_ws_captions_enforces_anonymous_admission_limit(monkeypatch):
-    """Anonymous connections are rejected with 1008 when the booth connection limit is reached."""
+    """Anonymous connections are rejected with 1008 when the booth connection limit is reached.
+    Token-bearing listeners do not consume anonymous admission slots."""
     from fastapi.websockets import WebSocketDisconnect
 
     from portal.config import settings
 
     monkeypatch.setattr(settings, "max_anonymous_caption_listeners_per_booth", 1)
 
-    with client.websocket_connect("/ws/captions/test-limit-booth"):
-        # First connection is active. Second connection should be rejected with 1008
-        with pytest.raises(WebSocketDisconnect) as exc_info:
-            with client.websocket_connect("/ws/captions/test-limit-booth"):
-                pass
-        assert exc_info.value.code == 1008
+    token = _embed_listener_token(event_slug="test-limit")
+    # Token-bearing listener is active
+    with client.websocket_connect(f"/ws/captions/test-limit-1-en?token={token}"):
+        # First anonymous connection should still succeed
+        with client.websocket_connect("/ws/captions/test-limit-1-en"):
+            # Second anonymous connection exceeds limit of 1 and is rejected with 1008
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                with client.websocket_connect("/ws/captions/test-limit-1-en"):
+                    pass
+            assert exc_info.value.code == 1008
+
 
 
 # ── TTS WebSocket Auth tests ──────────────────────────────────────────────────

@@ -116,7 +116,10 @@ async def create_webhook(
                 )
             )
             active_subs = count_result.scalars().all()
-            if len(active_subs) >= max_subs:
+            # Account for active duplicates of this target_url that will be pruned
+            active_duplicates_count = sum(1 for s in active_subs if s.target_url == data.target_url)
+            projected_active_count = len(active_subs) - active_duplicates_count + 1
+            if projected_active_count > max_subs:
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Maximum webhook subscriptions reached"
                 )

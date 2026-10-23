@@ -1,18 +1,3 @@
-{% if request and request.query_params and request.query_params.get('auth_sync') %}
-<script>
-  {% if current_user or user or user_menu or is_admin %}
-  if (typeof BroadcastChannel !== 'undefined') {
-    try {
-      const authChannel = new BroadcastChannel('voxbento_auth');
-      authChannel.postMessage('logged_in');
-      authChannel.close();
-    } catch (e) {}
-  }
-  {% endif %}
-  try {
-    const cleanUrl = new URL(window.location.href);
-    cleanUrl.searchParams.delete('auth_sync');
-    window.history.replaceState({}, document.title, cleanUrl.pathname + (cleanUrl.search ? cleanUrl.search : '') + cleanUrl.hash);
-  } catch (e) {}
-</script>
+{% if request and request.cookies.get('user_token') and ((request.query_params and request.query_params.get('auth_sync')) or (request.cookies and request.cookies.get('auth_sync'))) %}
+<script type="module" src="{{ url_for('static', path='js/auth-sync.js') }}?v={{ asset_version or js_version or '1' }}"></script>
 {% endif %}

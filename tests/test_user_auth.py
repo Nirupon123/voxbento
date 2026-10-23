@@ -1101,6 +1101,7 @@ class TestMagicLinkAuthentication:
                 assert open_res.status_code == 303
                 assert "/account?auth_sync=1" in open_res.headers.get("location", "")
                 assert "user_token" in opener_client.cookies
+                assert "auth_sync" in opener_client.cookies
 
                 # Session B is signed in
                 status_res_b = await opener_client.get("/api/auth/status")
@@ -1187,45 +1188,72 @@ class TestMagicLinkAuthentication:
             # base.html (e.g. /account)
             resp_sync = await c.get("/account?auth_sync=1", cookies={"user_token": token})
             assert resp_sync.status_code == 200
-            assert "voxbento_auth" in resp_sync.text
-            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_sync.text
+            assert "auth-sync.js" in resp_sync.text
+            # Invariant #5: no inline <script> block for auth sync
+            assert "const authChannel = new BroadcastChannel" not in resp_sync.text
 
             resp_normal = await c.get("/account", cookies={"user_token": token})
             assert resp_normal.status_code == 200
-            assert "cleanUrl.searchParams.delete('auth_sync')" not in resp_normal.text
+            assert "auth-sync.js" not in resp_normal.text
 
             # admin/base.html (e.g. /workspace/)
             resp_admin_sync = await c.get("/workspace/?auth_sync=1", cookies={"user_token": token})
             assert resp_admin_sync.status_code == 200
-            assert "voxbento_auth" in resp_admin_sync.text
-            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_admin_sync.text
+            assert "auth-sync.js" in resp_admin_sync.text
 
             resp_admin_normal = await c.get("/workspace/", cookies={"user_token": token})
             assert resp_admin_normal.status_code == 200
-            assert "cleanUrl.searchParams.delete('auth_sync')" not in resp_admin_normal.text
+            assert "auth-sync.js" not in resp_admin_normal.text
 
             # standalone templates (e.g. / and /local)
-            # Unauthenticated public request with auth_sync=1 cleans URL but does NOT broadcast
+            # Unauthenticated public request with auth_sync=1 does NOT load auth-sync.js
             resp_home_unauth = await c.get("/?auth_sync=1")
             assert resp_home_unauth.status_code == 200
-            assert "voxbento_auth" not in resp_home_unauth.text
-            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_home_unauth.text
+            assert "auth-sync.js" not in resp_home_unauth.text
 
             resp_local_unauth = await c.get("/local?auth_sync=1")
             assert resp_local_unauth.status_code == 200
-            assert "voxbento_auth" not in resp_local_unauth.text
-            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_local_unauth.text
+            assert "auth-sync.js" not in resp_local_unauth.text
 
-            # Authenticated request with auth_sync=1 broadcasts logged_in and cleans URL
+            # Authenticated request with auth_sync=1 loads auth-sync.js ES module
             resp_home_auth = await c.get("/?auth_sync=1", cookies={"user_token": token})
             assert resp_home_auth.status_code == 200
-            assert "voxbento_auth" in resp_home_auth.text
-            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_home_auth.text
+            assert "auth-sync.js" in resp_home_auth.text
 
             resp_local_auth = await c.get("/local?auth_sync=1", cookies={"user_token": token})
             assert resp_local_auth.status_code == 200
-            assert "voxbento_auth" in resp_local_auth.text
-            assert "cleanUrl.searchParams.delete('auth_sync')" in resp_local_auth.text
+            assert "auth-sync.js" in resp_local_auth.text
+
+    @pytest.mark.anyio
+    async def test_auth_sync_renders_on_non_admin_routes_without_user_in_context(self, setup_db):
+        from portal.database import create_event, get_session
+
+        user = await _create_test_user(email="non-admin-sync@example.com")
+        token = create_user_token(user_id=user.id, email=user.email, is_admin=False)
+
+        async with get_session() as s:
+            event = await create_event(s, slug="sync-route-event", display_name="Sync Route Event")
+
+        async with _client() as c:
+            # /listener/{slug} (listener-event.html omits user/current_user/is_admin in context)
+            resp_listener_auth = await c.get(f"/listener/{event.slug}?auth_sync=1", cookies={"user_token": token})
+            assert resp_listener_auth.status_code == 200
+            assert "auth-sync.js" in resp_listener_auth.text
+
+            # Unauthenticated request to listener route must not load auth-sync.js
+            resp_listener_unauth = await c.get(f"/listener/{event.slug}?auth_sync=1")
+            assert resp_listener_unauth.status_code == 200
+            assert "auth-sync.js" not in resp_listener_unauth.text
+
+            # /interpreter (interpreter_landing.html omits user/current_user/is_admin in context)
+            resp_interp_auth = await c.get("/interpreter?auth_sync=1", cookies={"user_token": token})
+            assert resp_interp_auth.status_code == 200
+            assert "auth-sync.js" in resp_interp_auth.text
+
+            # Ephemeral cookie trigger without query parameter also renders auth-sync.js
+            resp_cookie_auth = await c.get(f"/listener/{event.slug}", cookies={"user_token": token, "auth_sync": "1"})
+            assert resp_cookie_auth.status_code == 200
+            assert "auth-sync.js" in resp_cookie_auth.text
 
     @pytest.mark.anyio
     async def test_magic_link_redirect_places_auth_sync_in_query_before_fragment(self, setup_db):

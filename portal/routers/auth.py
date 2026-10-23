@@ -460,6 +460,14 @@ async def redeem_magic_link(request: Request, token: str, background_tasks: Back
                 samesite="lax",
                 max_age=settings.jwt_expiry_seconds,
             )
+            response.set_cookie(
+                key="auth_sync",
+                value="1",
+                max_age=15,
+                httponly=False,
+                secure=_is_cookie_secure(request),
+                samesite="lax",
+            )
             return response
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))

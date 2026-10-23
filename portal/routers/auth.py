@@ -5,13 +5,15 @@ import hashlib
 import logging
 import re
 import secrets
+import urllib.parse
+from datetime import timedelta
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import jwt
 import sqlalchemy as sa
-from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
@@ -42,20 +44,12 @@ from portal.database import (
     get_user_by_id,
     redeem_auth_token,
     redeem_invite_token,
-    revoke_auth_token,
-    revoke_auth_tokens,
     update_user,
 )
-from portal.email import (
-    send_hosting_request_notification,
-    send_magic_login_email,
-    send_password_reset_email,
-    send_verification_email,
-)
-from portal.email_sender import send_delayed_onboarding_email
 from portal.globals import _JS_CACHE_BUST, asset_version_context
 from portal.hosting_requests import format_event_dates, parse_hosting_request_form
 from portal.models import HOSTING_REQUEST_GRANTED, TOKEN_TYPE_HOSTING_INVITE, AuthToken, User, utc_now
+from portal.notifications import queue_notification
 from portal.rate_limit import check_rate_limit
 from portal.schemas.auth import TokenRequest, TokenResponse
 from portal.user_menu import resolve_user_menu, user_menu_context
@@ -76,39 +70,36 @@ _DUMMY_PASSWORD_HASH = "$2b$12$OEvt/xgDNq5iYebPcyO6L.ntTqE5qjv39rH/iPdAnvHg33d2v
 
 async def _queue_verification_email(
     session,
-    background_tasks: BackgroundTasks,
     email: str,
     user_id: int,
-    *,
-    revoke_existing: bool,
 ) -> None:
-    """Create a verification token and defer email delivery until after the response."""
-    if revoke_existing:
-        await revoke_auth_tokens(session, user_id=user_id, token_type="verification")
+    """Create the token and its durable message in one transaction.
+
+    Earlier verification links keep working: delivery happens later, so revoking
+    them now could leave the person with no working link if this email fails.
+    """
     token_val = secrets.token_hex(32)
-    await create_auth_token(session, jti=token_val, user_id=user_id, token_type="verification")  # nosec B105
-    background_tasks.add_task(
-        _deliver_verification_email,
+    auth_token = await create_auth_token(session, jti=token_val, user_id=user_id, token_type="verification")  # nosec B105
+    await queue_notification(
+        session,
+        "verification",
         email,
-        token_val,
-        user_id,
-        revoke_existing,
+        {"verification_link": f"{settings.public_base_url.rstrip('/')}/auth/verify/{token_val}"},
+        expires_at=auth_token.expires_at,
+        idempotency_key=f"verification:{token_val}",
+        auth_token_id=auth_token.id,
     )
 
 
-async def _deliver_verification_email(email: str, token: str, user_id: int, revoke_existing: bool) -> None:
-    """Deliver a verification email and finalize token replacement after delivery."""
-    delivered = await send_verification_email(email, token)
-    async with get_session() as session:
-        if delivered and revoke_existing:
-            await revoke_auth_tokens(
-                session,
-                user_id=user_id,
-                token_type="verification",
-                exclude_jti=token,
-            )
-        elif not delivered:
-            await revoke_auth_token(session, jti=token)
+async def _queue_password_notice(session, email: str, user_id: int, message: str) -> None:
+    """Tell the account owner their password changed, so they notice if it wasn't them."""
+    await queue_notification(
+        session,
+        "account_access",
+        email,
+        {"message": message, "login_url": f"{settings.public_base_url.rstrip('/')}/login"},
+        idempotency_key=f"password:{user_id}:{utc_now().isoformat()}",
+    )
 
 
 def _registration_success(request: Request, email: str) -> object:
@@ -201,7 +192,7 @@ async def register_page(request: Request):
 
 
 @router.post("/register")
-async def register_submit(request: Request, background_tasks: BackgroundTasks):
+async def register_submit(request: Request):
     form = await request.form()
     email = form.get("email", "").strip().lower()
     display_name = form.get("display_name", "").strip()
@@ -239,13 +230,7 @@ async def register_submit(request: Request, background_tasks: BackgroundTasks):
                         # can use the resulting magic-link session to set a
                         # new password.
                         existing.password_hash = None
-                        await _queue_verification_email(
-                            session,
-                            background_tasks,
-                            email,
-                            existing.id,
-                            revoke_existing=False,
-                        )
+                        await _queue_verification_email(session, email, existing.id)
                 return _registration_success(request, email)
 
             try:
@@ -269,16 +254,10 @@ async def register_submit(request: Request, background_tasks: BackgroundTasks):
                 ):
                     if existing.is_active:
                         existing.password_hash = None
-                        await _queue_verification_email(
-                            session,
-                            background_tasks,
-                            email,
-                            existing.id,
-                            revoke_existing=False,
-                        )
+                        await _queue_verification_email(session, email, existing.id)
                 return _registration_success(request, email)
 
-            await _queue_verification_email(session, background_tasks, email, user.id, revoke_existing=True)
+            await _queue_verification_email(session, email, user.id)
             return _registration_success(request, email)
 
     return templates.TemplateResponse(
@@ -290,7 +269,7 @@ async def register_submit(request: Request, background_tasks: BackgroundTasks):
 
 
 @router.get("/auth/verify/{token}")
-async def verify_email_route(request: Request, token: str, background_tasks: BackgroundTasks):
+async def verify_email_route(request: Request, token: str):
     async with get_session() as session:
         try:
             auth_token = await redeem_auth_token(session, token, "verification")
@@ -298,7 +277,14 @@ async def verify_email_route(request: Request, token: str, background_tasks: Bac
             if user is None or not user.is_active:
                 raise ValueError("Invalid verification link.")
             user = await update_user(session, auth_token.user_id, email_verified=True)
-            background_tasks.add_task(send_delayed_onboarding_email, user.email, user.display_name)
+            await queue_notification(
+                session,
+                "onboarding",
+                user.email,
+                {"display_name": user.display_name},
+                scheduled_at=utc_now() + timedelta(minutes=15),
+                idempotency_key=f"onboarding:{user.id}",
+            )
 
             jwt_token = create_user_token(
                 user_id=user.id, email=user.email, display_name=user.display_name, is_admin=user.is_admin
@@ -394,21 +380,32 @@ async def request_magic_link(request: Request):
         user = await get_user_by_email(session, email)
         if user:
             token_val = secrets.token_hex(32)
-            await create_auth_token(
+            auth_tok = await create_auth_token(
                 session,
                 jti=token_val,
                 user_id=user.id,
                 token_type="magic_link",  # nosec B105
             )
-            sent = await send_magic_login_email(email, token_val, next_url)
-            if not sent:
-                logger.error("Failed to deliver magic link email to %s", email)
+            # The link signs in only the browser that opens it (#929); nothing here is
+            # returned to the requesting browser.
+            magic_link = f"{settings.public_base_url.rstrip('/')}/auth/magic/{token_val}"
+            if next_url:
+                magic_link += f"?next={urllib.parse.quote(next_url)}"
+            await queue_notification(
+                session,
+                "magic_login",
+                email,
+                {"magic_link": magic_link},
+                expires_at=auth_tok.expires_at,
+                idempotency_key=f"magic-login:{token_val}",
+                auth_token_id=auth_tok.id,
+            )
 
     return {"status": "ok"}
 
 
 @router.get("/auth/magic/{token}")
-async def redeem_magic_link(request: Request, token: str, background_tasks: BackgroundTasks, next: str | None = None):
+async def redeem_magic_link(request: Request, token: str, next: str | None = None):
     async with get_session() as session:
         try:
             auth_token = await redeem_auth_token(session, token, "magic_link")
@@ -419,7 +416,14 @@ async def redeem_magic_link(request: Request, token: str, background_tasks: Back
             # If they log in via magic link, we can implicitly consider their email verified
             if not user.email_verified:
                 await update_user(session, user.id, email_verified=True)
-                background_tasks.add_task(send_delayed_onboarding_email, user.email, user.display_name)
+                await queue_notification(
+                    session,
+                    "onboarding",
+                    user.email,
+                    {"display_name": user.display_name},
+                    scheduled_at=utc_now() + timedelta(minutes=15),
+                    idempotency_key=f"onboarding:{user.id}",
+                )
 
             jwt_token = create_user_token(
                 user_id=user.id, email=user.email, display_name=user.display_name, is_admin=user.is_admin
@@ -487,13 +491,21 @@ async def forgot_password_request(request: Request):
             import secrets
 
             token_val = secrets.token_hex(32)
-            await create_auth_token(
+            reset_token = await create_auth_token(
                 session,
                 jti=token_val,
                 user_id=user.id,
                 token_type="password_reset",  # nosec B105
             )
-            await send_password_reset_email(email, token_val)
+            await queue_notification(
+                session,
+                "password_reset",
+                email,
+                {"reset_link": f"{settings.public_base_url.rstrip('/')}/auth/reset/{token_val}"},
+                expires_at=reset_token.expires_at if reset_token else None,
+                idempotency_key=f"password-reset:{token_val}",
+                auth_token_id=reset_token.id if reset_token else None,
+            )
 
     return {"status": "ok"}
 
@@ -550,6 +562,7 @@ async def reset_password_submit(request: Request, token: str):
             user = await update_user(session, auth_token.user_id, password_hash=pw_hash)
             if user is None:
                 raise ValueError("User not found.")
+            await _queue_password_notice(session, user.email, user.id, "Your VoxBento password was reset.")
             jwt_token = create_user_token(
                 user_id=user.id, email=user.email, display_name=user.display_name, is_admin=user.is_admin
             )
@@ -726,24 +739,27 @@ async def submit_hosting_request(request: Request):
                 message=cleaned.message,
             )
             user.hosting_requested_at = hosting_request.created_at
-            requester_name = user.display_name
-            requester_email = user.email
+            await queue_notification(
+                session,
+                "hosting_request",
+                settings.hosting_requests_email,
+                {
+                    "requester_name": user.display_name,
+                    "requester_email": user.email,
+                    "organization": cleaned.organization,
+                    "event_name": cleaned.event_name,
+                    "event_dates": format_event_dates(cleaned.event_starts_on, cleaned.event_ends_on),
+                    "languages": cleaned.languages,
+                    "message": cleaned.message,
+                    "review_url": f"{settings.public_base_url.rstrip('/')}/admin/hosting-access/requests/",
+                },
+                idempotency_key=f"hosting-request:{hosting_request.id}",
+            )
     except IntegrityError:
         # A concurrent submission already opened this user's one request.
         return safe_redirect(url="/account", status_code=status.HTTP_303_SEE_OTHER)
 
     logger.info("Hosting access request %d opened by user %d", hosting_request.id, hosting_request.user_id)
-    await send_hosting_request_notification(
-        settings.hosting_requests_email,
-        requester_name=requester_name,
-        requester_email=requester_email,
-        organization=cleaned.organization,
-        event_name=cleaned.event_name,
-        event_dates=format_event_dates(cleaned.event_starts_on, cleaned.event_ends_on),
-        languages=cleaned.languages,
-        message=cleaned.message,
-        review_url=f"{settings.public_base_url.rstrip('/')}/admin/hosting-access/requests/",
-    )
     return safe_redirect(url="/account?success=hosting_request_sent", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -766,7 +782,14 @@ async def set_password_api(request: Request):
             isinstance(current_password, str) and verify_password(current_password, user.password_hash)
         ):
             raise HTTPException(status_code=403, detail="Your current password is not correct")
+        had_password = bool(user.password_hash)
         await update_user(session, user.id, password_hash=hash_password(password))
+        await _queue_password_notice(
+            session,
+            user.email,
+            user.id,
+            "Your VoxBento password was changed." if had_password else "You set a password for your VoxBento account.",
+        )
 
     return {"status": "ok"}
 
@@ -787,6 +810,9 @@ async def remove_password_api(request: Request):
 
         # Set directly: update_user() treats None as "leave unchanged".
         user.password_hash = None
+        await _queue_password_notice(
+            session, user.email, user.id, "Your VoxBento password was removed. You now sign in with email links."
+        )
 
     return {"status": "ok"}
 

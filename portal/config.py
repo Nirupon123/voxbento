@@ -149,6 +149,8 @@ class Settings(BaseSettings):
     public_base_url: str = "https://voxbento.com"
     # Webhook Settings
     max_webhook_subscriptions: int = 50
+    # Caption WebSocket Settings
+    max_anonymous_caption_listeners_per_booth: int = 500
 
 
 settings = Settings()

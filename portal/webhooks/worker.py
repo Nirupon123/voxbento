@@ -94,6 +94,10 @@ async def process_delivery(client: httpx.AsyncClient, db, delivery: WebhookDeliv
     if success:
         delivery.status = "succeeded"
         delivery.last_error = None
+        try:
+            await db.refresh(sub)
+        except Exception:
+            pass
         if sub.consecutive_failures > 0:
             sub.consecutive_failures = 0
             db.add(sub)
@@ -101,6 +105,10 @@ async def process_delivery(client: httpx.AsyncClient, db, delivery: WebhookDeliv
         delivery.last_error = last_error
         if delivery.attempt_count >= 4:
             delivery.status = "dead"
+            try:
+                await db.refresh(sub)
+            except Exception:
+                pass
             sub.consecutive_failures += 1
 
             if sub.consecutive_failures >= 5:

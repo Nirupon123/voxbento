@@ -6,14 +6,21 @@ import secrets
 import socket
 import urllib.parse
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from portal.auth import require_oauth_scope
 from portal.database import get_db_session
-from portal.models import OAuthAuditLog, OAuthClient, OAuthToken, WebhookSubscription
+from portal.models import (
+    DeveloperAccount,
+    OAuthAuditLog,
+    OAuthClient,
+    OAuthToken,
+    WebhookDelivery,
+    WebhookSubscription,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +68,7 @@ def validate_ssrf(url: str) -> None:
 @router.post("", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
 async def create_webhook(
     data: WebhookCreate,
+    response: Response = None,
     token: OAuthToken = Depends(require_oauth_scope("webhooks:manage")),
     db: AsyncSession = Depends(get_db_session),
 ):
@@ -73,6 +81,17 @@ async def create_webhook(
     client = client_result.scalars().first()
     if not client:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid client")
+
+    # Serialize webhook operations per developer account
+    is_sqlite = db.get_bind().dialect.name == "sqlite"
+    dev_stmt = select(DeveloperAccount).where(DeveloperAccount.id == client.developer_account_id)
+    if not is_sqlite:
+        dev_stmt = dev_stmt.with_for_update()
+    await db.execute(dev_stmt)
+
+    from portal.config import settings
+
+    max_subs = getattr(settings, "max_webhook_subscriptions", 50)
 
     # Idempotency Check: if a subscription with the same target_url already exists
     # for this developer account, update and reactivate it rather than creating duplicates.
@@ -88,14 +107,34 @@ async def create_webhook(
 
     if existing_subs:
         sub = existing_subs[0]
+        # Check active quota before reactivating an inactive subscription
+        if not sub.is_active:
+            count_result = await db.execute(
+                select(WebhookSubscription).where(
+                    WebhookSubscription.developer_account_id == client.developer_account_id,
+                    WebhookSubscription.is_active.is_(True),
+                )
+            )
+            active_subs = count_result.scalars().all()
+            if len(active_subs) >= max_subs:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Maximum webhook subscriptions reached"
+                )
+
         sub.event_types = sorted(set(data.event_types))
         sub.is_active = True
         sub.consecutive_failures = 0
         if not sub.secret_key:
             sub.secret_key = f"whsec_{secrets.token_urlsafe(32)}"
 
-        # Prune any duplicate subscriptions for this exact target_url
+        # Prune any duplicate subscriptions for this exact target_url,
+        # reassigning outstanding deliveries to the surviving subscription
         for duplicate in existing_subs[1:]:
+            await db.execute(
+                update(WebhookDelivery)
+                .where(WebhookDelivery.subscription_id == duplicate.id)
+                .values(subscription_id=sub.id)
+            )
             await db.delete(duplicate)
 
         audit = OAuthAuditLog(
@@ -108,6 +147,9 @@ async def create_webhook(
         db.add(audit)
         await db.flush()
 
+        if response is not None:
+            response.status_code = status.HTTP_200_OK
+
         return WebhookResponse(
             id=sub.id,
             target_url=sub.target_url,
@@ -117,8 +159,6 @@ async def create_webhook(
         )
 
     # Quota Check for newly created webhook subscriptions
-    from portal.config import settings
-
     count_result = await db.execute(
         select(WebhookSubscription).where(
             WebhookSubscription.developer_account_id == client.developer_account_id,
@@ -126,7 +166,6 @@ async def create_webhook(
         )
     )
     active_subs = count_result.scalars().all()
-    max_subs = getattr(settings, "max_webhook_subscriptions", 50)
     if len(active_subs) >= max_subs:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Maximum webhook subscriptions reached"

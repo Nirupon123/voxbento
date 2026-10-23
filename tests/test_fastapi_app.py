@@ -2203,12 +2203,46 @@ def test_ws_captions_rejects_invalid_token():
     assert exc_info.value.code == 4001
 
 
+def test_ws_captions_token_rejects_prefix_sharing_different_event_slug():
+    """Token for 'event-a' must be rejected with 4003 when connecting to 'event-a-other-1-en'."""
+    from fastapi.websockets import WebSocketDisconnect
+
+    token_event_a = _embed_listener_token(event_slug="event-a")
+
+    # Connecting to a booth belonging to 'event-a-other' with token for 'event-a' must be rejected
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(f"/ws/captions/event-a-other-1-en?token={token_event_a}"):
+            pass
+    assert exc_info.value.code == 4003
+
+    # Connecting to 'event-a-1-en' with token for 'event-a' must succeed
+    with client.websocket_connect(f"/ws/captions/event-a-1-en?token={token_event_a}"):
+        pass
+
+
+
 def test_ws_captions_allows_cross_origin_with_ambient_cookies():
     """Cross-origin connection from an external client with ambient cookies must not fail origin checks."""
     headers = {"origin": "https://external-client.example.org"}
     cookies = {"user_token": "some-ambient-cookie"}
     with client.websocket_connect("/ws/captions/test-event-1-en", headers=headers, cookies=cookies):
         pass
+
+
+def test_ws_captions_enforces_anonymous_admission_limit(monkeypatch):
+    """Anonymous connections are rejected with 1008 when the booth connection limit is reached."""
+    from fastapi.websockets import WebSocketDisconnect
+
+    from portal.config import settings
+
+    monkeypatch.setattr(settings, "max_anonymous_caption_listeners_per_booth", 1)
+
+    with client.websocket_connect("/ws/captions/test-limit-booth"):
+        # First connection is active. Second connection should be rejected with 1008
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect("/ws/captions/test-limit-booth"):
+                pass
+        assert exc_info.value.code == 1008
 
 
 # ── TTS WebSocket Auth tests ──────────────────────────────────────────────────

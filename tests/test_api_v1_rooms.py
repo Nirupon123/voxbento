@@ -272,3 +272,53 @@ async def test_room_endpoints_resolve_by_eventyay_room_id():
         )
         assert token_resp_internal.status_code == 200
 
+
+@pytest.mark.anyio
+async def test_room_endpoints_prioritize_eventyay_id_over_internal_id_collision():
+    """When an Eventyay room ID numerically matches another room's internal ID, Eventyay ID takes priority."""
+    event = await _seed()
+
+    async with _client() as c:
+        # Create Room 1 with eventyay_room_id="2"
+        res1 = await c.put(
+            f"/api/v1/events/{event.slug}/rooms/2",
+            json={"name": "Room A", "target_languages": ["fr"]},
+            headers=_auth(),
+        )
+        assert res1.status_code == 200
+        room_a_internal_id = res1.json()["room_id"]  # typically 1 in fresh SQLite
+
+        # Create Room 2 with eventyay_room_id=str(room_a_internal_id) (e.g. "1")
+        res2 = await c.put(
+            f"/api/v1/events/{event.slug}/rooms/{room_a_internal_id}",
+            json={"name": "Room B", "target_languages": ["es"]},
+            headers=_auth(),
+        )
+        assert res2.status_code == 200
+
+        # Querying with room_id=str(room_a_internal_id) must resolve to Room B (matching eventyay_room_id),
+        # NOT Room A (whose internal PK happens to match)
+        booths_resp = await c.get(
+            f"/api/v1/events/{event.slug}/rooms/{room_a_internal_id}/booths",
+            headers=_auth(),
+        )
+        assert booths_resp.status_code == 200
+        booths_data = booths_resp.json()
+        assert len(booths_data) == 1
+        assert booths_data[0]["language_code"] == "es"  # Room B's booth, not Room A's "fr"
+
+
+@pytest.mark.anyio
+async def test_room_endpoint_handles_non_ascii_digit_without_server_error():
+    """Non-ASCII digits like '²' (where isdigit() is True but int() raises ValueError) return 404, not 500."""
+    event = await _seed()
+
+    async with _client() as c:
+        res = await c.get(
+            f"/api/v1/events/{event.slug}/rooms/²/booths",
+            headers=_auth(),
+        )
+        assert res.status_code == 404
+        assert res.json()["detail"] == "Room not found"
+
+

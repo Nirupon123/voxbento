@@ -374,11 +374,15 @@ async def test_create_webhook_idempotency_and_deduplication(db, monkeypatch):
     orig_secret = res1.secret_key
 
     # 2. Call again with same target_url but updated event_types
+    from fastapi import Response
+
+    resp2 = Response()
     req2 = WebhookCreate(
         target_url="https://client.example.com/webhook/",
         event_types=["booth.transcription.started", "booth.transcription.stopped"],
     )
-    res2 = await create_webhook(req2, token=token, db=db)
+    res2 = await create_webhook(req2, response=resp2, token=token, db=db)
+    assert resp2.status_code == 200
     assert res2.id == orig_id
     assert res2.secret_key == orig_secret
     assert set(res2.event_types) == {"booth.transcription.started", "booth.transcription.stopped"}
@@ -397,14 +401,31 @@ async def test_create_webhook_idempotency_and_deduplication(db, monkeypatch):
     )
     db.add(dup)
     await db.flush()
+
+    from portal.models import WebhookDelivery
+
+    delivery = WebhookDelivery(
+        subscription_id=dup.id,
+        event_type="booth.transcription.started",
+        payload={"test": "reassigned"},
+    )
+    db.add(delivery)
+    await db.flush()
+    delivery_id = delivery.id
+
     assert len((await db.execute(select(WebhookSubscription))).scalars().all()) == 2
 
-    # Call create_webhook again — it should prune the duplicate!
+    # Call create_webhook again — it should prune the duplicate and reassign pending deliveries!
     res3 = await create_webhook(req2, token=token, db=db)
     assert res3.id == orig_id
     subs_after_prune = (await db.execute(select(WebhookSubscription))).scalars().all()
     assert len(subs_after_prune) == 1
     assert subs_after_prune[0].id == orig_id
+
+    # Verify delivery was preserved and reassigned to orig_id
+    reassigned_del = (await db.execute(select(WebhookDelivery).where(WebhookDelivery.id == delivery_id))).scalars().first()
+    assert reassigned_del is not None
+    assert reassigned_del.subscription_id == orig_id
 
 
 @pytest.mark.anyio
@@ -470,4 +491,25 @@ async def test_create_webhook_quota_limit(db, monkeypatch):
         db=db,
     )
     assert res_existing.target_url == "https://example.com/wh/1"
+
+    # Deactivating an existing subscription and creating a new one works within quota
+    sub_row = (await db.execute(select(WebhookSubscription).where(WebhookSubscription.target_url == "https://example.com/wh/1"))).scalars().first()
+    sub_row.is_active = False
+    await db.flush()
+
+    # Now create another sub to reach the quota of 3 active subs again
+    await create_webhook(
+        WebhookCreate(target_url="https://example.com/wh/filler", event_types=["test"]),
+        token=token,
+        db=db,
+    )
+
+    # Trying to reactivate the inactive sub while active quota is full raises 429
+    with pytest.raises(HTTPException) as exc_info:
+        await create_webhook(
+            WebhookCreate(target_url="https://example.com/wh/1", event_types=["test"]),
+            token=token,
+            db=db,
+        )
+    assert exc_info.value.status_code == 429
 

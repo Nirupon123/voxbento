@@ -128,13 +128,30 @@ async def ws_captions(websocket: WebSocket, booth_id: str) -> None:
             payload = decode_token(token)
             if not (payload.get("is_admin") or payload.get("admin")):
                 token_event = payload.get("event_slug", "")
-                if not token_event or not (
-                    booth_id.startswith(f"{token_event}-") or booth_id.startswith(f"{token_event}/")
-                ):
+                booth_event: str | None = None
+                try:
+                    from portal.booth_identity import parse_booth_id
+
+                    booth_event, _, _ = parse_booth_id(booth_id)
+                except ValueError:
+                    if "/" in booth_id:
+                        booth_event = booth_id.split("/")[0]
+                    elif "-" in booth_id:
+                        booth_event = booth_id.rsplit("-", 1)[0]
+
+                if not token_event or booth_event != token_event:
                     await websocket.close(code=4003)
                     return
         except Exception:
             await websocket.close(code=4001)
+            return
+    else:
+        from portal.config import settings
+
+        max_anon = getattr(settings, "max_anonymous_caption_listeners_per_booth", 500)
+        current_count = len(listener_manager._rooms.get(booth_id, set()))
+        if current_count >= max_anon:
+            await websocket.close(code=1008)
             return
     await websocket.accept()
     listener_manager.add(websocket, booth_id)

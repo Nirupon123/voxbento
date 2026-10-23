@@ -1109,16 +1109,17 @@ class TestMagicLinkAuthentication:
     async def test_magic_link_oauth_flow_renders_magic_success(self, setup_db, monkeypatch):
         from urllib.parse import parse_qs, urlparse
 
-        import portal.email
+        import portal.routers.auth as auth_router
 
         captured_links: list[str] = []
+        queue_notification = auth_router.queue_notification
 
-        async def fake_send_email_async(email_to: str, subject: str, template_name: str, template_body: dict):
-            if "magic_link" in template_body:
-                captured_links.append(template_body["magic_link"])
-            return True
+        async def capture(session, key, recipient, context, **kwargs):
+            if key == "magic_login":
+                captured_links.append(context["magic_link"])
+            return await queue_notification(session, key, recipient, context, **kwargs)
 
-        monkeypatch.setattr(portal.email, "_send_email_async", fake_send_email_async)
+        monkeypatch.setattr(auth_router, "queue_notification", capture)
 
         user = await _create_test_user(email="oauth-user@example.com")
         next_oauth = "/oauth/authorize?client_id=test_client&event=test_event"
@@ -1161,9 +1162,9 @@ class TestMagicLinkAuthentication:
         assert "startMagicPoll" not in content
         assert "voxbento_auth" in content
         text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", content))
-        assert "If you sign in on another device or browser, open VoxBento there, or request a new link here." in text
-        assert "If you sign in on another device or browser, open VoxBento there, or" in content
-        assert "request a new link here" in content
+        assert "Open it in this browser and this page continues on its own." in text
+        assert "If you open it on another device or browser, you'll be signed in there instead." in text
+        assert 'id="request-new-link"' in content
 
     @pytest.mark.anyio
     async def test_base_and_admin_templates_render_auth_sync_script_when_query_param_present(self, setup_db):

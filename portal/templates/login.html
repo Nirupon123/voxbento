@@ -20,11 +20,13 @@
 
     <div id="alert-container" class="alert alert-error hidden"></div>
     <div id="success-container" class="alert alert-success hidden"></div>
-    <div id="waiting-container" class="alert alert-success hidden">
-      <div style="font-weight: 600; margin-bottom: 8px;">We've sent a magic link to your email. Please check your inbox.</div>
-      <div style="font-size: 0.9em; opacity: 0.95; line-height: 1.4;">
-        If you sign in on another device or browser, open VoxBento there, or <a href="#" id="request-new-link" style="text-decoration: underline; color: inherit; font-weight: 600;">request a new link here</a>.
-      </div>
+    <div id="waiting-container" class="alert alert-success login-waiting hidden" role="status">
+      <p class="login-waiting-title">We've emailed you a sign-in link.</p>
+      <p class="login-waiting-text">
+        Open it in this browser and this page continues on its own. If you open it on another
+        device or browser, you'll be signed in there instead.
+        <a href="#" id="request-new-link">Request a new link</a>
+      </p>
     </div>
 
     <!-- Step 1: Email Only -->

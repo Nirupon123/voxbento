@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 
 from portal.database import get_session
 from portal.models import OAuthAuditLog, WebhookDelivery, WebhookSubscription
@@ -96,8 +97,8 @@ async def process_delivery(client: httpx.AsyncClient, db, delivery: WebhookDeliv
         delivery.last_error = None
         try:
             await db.refresh(sub)
-        except Exception:
-            pass
+        except SQLAlchemyError as err:
+            logger.debug("Failed to refresh subscription %s on delivery success: %s", sub.id, err)
         if sub.consecutive_failures > 0:
             sub.consecutive_failures = 0
             db.add(sub)
@@ -107,8 +108,8 @@ async def process_delivery(client: httpx.AsyncClient, db, delivery: WebhookDeliv
             delivery.status = "dead"
             try:
                 await db.refresh(sub)
-            except Exception:
-                pass
+            except SQLAlchemyError as err:
+                logger.debug("Failed to refresh subscription %s on delivery failure: %s", sub.id, err)
             sub.consecutive_failures += 1
 
             if sub.consecutive_failures >= 5:

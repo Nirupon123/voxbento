@@ -154,14 +154,16 @@ async def ws_captions(websocket: WebSocket, booth_id: str) -> None:
             await websocket.close(code=1008)
             return
 
+    accepted = False
     try:
         await websocket.accept()
-    except Exception:
-        if is_anonymous:
+        accepted = True
+    finally:
+        if not accepted and is_anonymous:
             listener_manager.cancel_reservation(websocket, booth_id)
-        raise
 
     listener_manager.add(websocket, booth_id, is_anonymous=is_anonymous)
+
     try:
         while True:
             await websocket.receive_text()

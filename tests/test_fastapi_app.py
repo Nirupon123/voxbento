@@ -125,7 +125,7 @@ def test_token_redactor_handles_legacy_api_query_credentials():
         level=logging.INFO,
         pathname="",
         lineno=0,
-        msg='GET /api/events/demo/booths?access_token=secretjwt123&room_id=1',
+        msg="GET /api/events/demo/booths?access_token=secretjwt123&room_id=1",
         args=(),
         exc_info=None,
     )
@@ -2220,7 +2220,6 @@ def test_ws_captions_token_rejects_prefix_sharing_different_event_slug():
         pass
 
 
-
 def test_ws_captions_allows_cross_origin_with_ambient_cookies():
     """Cross-origin connection from an external client with ambient cookies must not fail origin checks."""
     headers = {"origin": "https://external-client.example.org"}
@@ -2249,6 +2248,51 @@ def test_ws_captions_enforces_anonymous_admission_limit(monkeypatch):
                     pass
             assert exc_info.value.code == 1008
 
+
+def test_ws_captions_zero_anonymous_limit_does_not_populate_anon_rooms(monkeypatch):
+    """When max_anonymous_caption_listeners_per_booth is 0, anonymous requests are rejected
+    without creating an empty entry in listener_manager._anon_rooms."""
+    from fastapi.websockets import WebSocketDisconnect
+
+    from portal.config import settings
+    from portal.websockets.manager import listener_manager
+
+    monkeypatch.setattr(settings, "max_anonymous_caption_listeners_per_booth", 0)
+
+    booth_id = "test-zero-anon-limit"
+    assert booth_id not in listener_manager._anon_rooms
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(f"/ws/captions/{booth_id}"):
+            pass
+    assert exc_info.value.code == 1008
+
+    # Must NOT have created an empty set entry in _anon_rooms!
+    assert booth_id not in listener_manager._anon_rooms
+
+
+def test_ws_captions_releases_reservation_on_cancellation(monkeypatch):
+    """If accept() raises an exception (or is cancelled), the reservation is released."""
+    import asyncio
+
+    from starlette.websockets import WebSocket
+
+    from portal.websockets.manager import listener_manager
+
+    booth_id = "test-cancel-reservation"
+
+    async def mock_accept(self, subprotocol=None):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(WebSocket, "accept", mock_accept)
+
+    try:
+        with client.websocket_connect(f"/ws/captions/{booth_id}"):
+            pass
+    except BaseException:
+        pass
+
+    assert listener_manager.count_anonymous(booth_id) == 0
 
 
 # ── TTS WebSocket Auth tests ──────────────────────────────────────────────────

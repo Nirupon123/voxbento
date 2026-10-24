@@ -75,9 +75,14 @@ class ListenerConnectionManager:
         return len(self._anon_rooms.get(booth_id, set()))
 
     def try_reserve_anonymous(self, ws: WebSocket, booth_id: str, max_anon: int) -> bool:
-        anon_set = self._anon_rooms.setdefault(booth_id, set())
-        if len(anon_set) >= max_anon:
+        if max_anon <= 0:
             return False
+        anon_set = self._anon_rooms.get(booth_id)
+        if anon_set is not None and len(anon_set) >= max_anon:
+            return False
+        if anon_set is None:
+            anon_set = set()
+            self._anon_rooms[booth_id] = anon_set
         anon_set.add(ws)
         return True
 

@@ -97,40 +97,42 @@ async def process_delivery(client: httpx.AsyncClient, db, delivery: WebhookDeliv
         delivery.last_error = None
         try:
             await db.refresh(sub)
+            if sub.consecutive_failures > 0:
+                sub.consecutive_failures = 0
+                db.add(sub)
         except SQLAlchemyError as err:
             logger.debug("Failed to refresh subscription %s on delivery success: %s", sub.id, err)
-        if sub.consecutive_failures > 0:
-            sub.consecutive_failures = 0
-            db.add(sub)
     else:
         delivery.last_error = last_error
         if delivery.attempt_count >= 4:
             delivery.status = "dead"
             try:
                 await db.refresh(sub)
+                sub.consecutive_failures += 1
+
+                if sub.consecutive_failures >= 5:
+                    sub.is_active = False
+
+                    from portal.models import OAuthClient
+
+                    client_result = await db.execute(
+                        select(OAuthClient)
+                        .where(OAuthClient.developer_account_id == sub.developer_account_id)
+                        .order_by(OAuthClient.id)
+                    )
+                    dev_client = client_result.scalars().first()
+
+                    audit = OAuthAuditLog(
+                        client_id=dev_client.id if dev_client else None,
+                        action="webhook.circuit_breaker_tripped",
+                        request_path=f"/dispatch/{sub.id}",
+                        status_code=500,
+                    )
+                    db.add(audit)
+                db.add(sub)
             except SQLAlchemyError as err:
                 logger.debug("Failed to refresh subscription %s on delivery failure: %s", sub.id, err)
-            sub.consecutive_failures += 1
 
-            if sub.consecutive_failures >= 5:
-                sub.is_active = False
-
-                from portal.models import OAuthClient
-                client_result = await db.execute(
-                    select(OAuthClient)
-                    .where(OAuthClient.developer_account_id == sub.developer_account_id)
-                    .order_by(OAuthClient.id)
-                )
-                dev_client = client_result.scalars().first()
-
-                audit = OAuthAuditLog(
-                    client_id=dev_client.id if dev_client else None,
-                    action="webhook.circuit_breaker_tripped",
-                    request_path=f"/dispatch/{sub.id}",
-                    status_code=500,
-                )
-                db.add(audit)
-            db.add(sub)
         else:
             delivery.status = "failed"
             backoff_seconds = 2**delivery.attempt_count

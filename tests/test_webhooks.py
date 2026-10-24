@@ -423,7 +423,9 @@ async def test_create_webhook_idempotency_and_deduplication(db, monkeypatch):
     assert subs_after_prune[0].id == orig_id
 
     # Verify delivery was preserved and reassigned to orig_id
-    reassigned_del = (await db.execute(select(WebhookDelivery).where(WebhookDelivery.id == delivery_id))).scalars().first()
+    reassigned_del = (
+        (await db.execute(select(WebhookDelivery).where(WebhookDelivery.id == delivery_id))).scalars().first()
+    )
     assert reassigned_del is not None
     assert reassigned_del.subscription_id == orig_id
 
@@ -493,7 +495,15 @@ async def test_create_webhook_quota_limit(db, monkeypatch):
     assert res_existing.target_url == "https://example.com/wh/1"
 
     # Deactivating an existing subscription and creating a new one works within quota
-    sub_row = (await db.execute(select(WebhookSubscription).where(WebhookSubscription.target_url == "https://example.com/wh/1"))).scalars().first()
+    sub_row = (
+        (
+            await db.execute(
+                select(WebhookSubscription).where(WebhookSubscription.target_url == "https://example.com/wh/1")
+            )
+        )
+        .scalars()
+        .first()
+    )
     sub_row.is_active = False
     await db.flush()
 
@@ -528,7 +538,15 @@ async def test_create_webhook_quota_limit(db, monkeypatch):
 
     # Now active subs = 4 (wh/2, wh/3, wh/filler, wh/1-dup).
     # Deactivate wh/filler so active subs = 3 (quota limit of 3 is reached).
-    filler_sub = (await db.execute(select(WebhookSubscription).where(WebhookSubscription.target_url == "https://example.com/wh/filler"))).scalars().first()
+    filler_sub = (
+        (
+            await db.execute(
+                select(WebhookSubscription).where(WebhookSubscription.target_url == "https://example.com/wh/filler")
+            )
+        )
+        .scalars()
+        .first()
+    )
     filler_sub.is_active = False
     await db.flush()
 
@@ -543,3 +561,46 @@ async def test_create_webhook_quota_limit(db, monkeypatch):
     assert res_reactivated.is_active is True
 
 
+@pytest.mark.anyio
+async def test_process_delivery_handles_failed_refresh_gracefully(db, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from portal.webhooks.worker import process_delivery
+
+    sub = WebhookSubscription(
+        developer_account_id=1,
+        target_url="https://example.com/webhook",
+        event_types=["session.status_changed"],
+        secret_key="secret",
+        is_active=True,
+        consecutive_failures=2,
+    )
+    db.add(sub)
+    await db.flush()
+
+    delivery = WebhookDelivery(
+        subscription_id=sub.id,
+        event_type="session.status_changed",
+        payload={"is_active": True},
+        status="pending",
+        attempt_count=0,
+    )
+    db.add(delivery)
+    await db.flush()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_resp = AsyncMock()
+    mock_resp.raise_for_status = MagicMock(return_value=None)
+    mock_client.post.return_value = mock_resp
+
+    async def mock_refresh(instance):
+        raise SQLAlchemyError("Simulated database refresh failure")
+
+    monkeypatch.setattr(db, "refresh", mock_refresh)
+
+    # Must complete successfully without raising exception on sub access
+    await process_delivery(mock_client, db, delivery)
+    assert delivery.status == "succeeded"
+    assert delivery.last_error is None
